@@ -113,7 +113,7 @@ class McpControllerIntegrationTest : IntegrationTestBase() {
     }
 
     @Test
-    fun `mcp tools list returns an empty list in phase 4b`() {
+    fun `mcp tools list advertises the registered tools as a JSON-RPC result array`() {
         val result =
             mockMvc
                 .post("/mcp") {
@@ -123,9 +123,14 @@ class McpControllerIntegrationTest : IntegrationTestBase() {
                 }.andReturn()
 
         assertThat(result.response.status).isEqualTo(200)
+        // Assert on the contract — `tools` is a JSON array of objects
+        // with `name` set — rather than pinning a count. The capture
+        // suite (CaptureFlowIntegrationTest) already pins the specific
+        // tool names; adding new tools should not regress this test.
         val tools = objectMapper.readTree(result.response.contentAsString)["result"]["tools"]
         assertThat(tools.isArray).isTrue
-        assertThat(tools).isEmpty()
+        assertThat(tools.size()).isGreaterThan(0)
+        tools.forEach { assertThat(it["name"].asText()).isNotBlank }
     }
 
     @Test

@@ -1,3 +1,6 @@
+@file:Suppress("DEPRECATION") // Jackson 3 deprecated JsonNode.asText() in favour of asString();
+// keeping the JsonNode shape across the codebase until a coordinated migration lands.
+
 package com.jorisjonkers.personalstack.knowledge.mcp
 
 import org.springframework.http.MediaType
@@ -19,7 +22,9 @@ import tools.jackson.databind.JsonNode
  */
 @RestController
 @RequestMapping("/mcp", produces = [MediaType.APPLICATION_JSON_VALUE])
-class McpController {
+class McpController(
+    private val tools: McpTools,
+) {
     @PostMapping(consumes = [MediaType.APPLICATION_JSON_VALUE])
     fun rpc(
         @RequestBody request: JsonRpcRequest,
@@ -34,9 +39,33 @@ class McpController {
         when (request.method) {
             "initialize" -> JsonRpcResponse(id = request.id, result = handleInitialize())
             "ping" -> JsonRpcResponse(id = request.id, result = emptyMap<String, Any>())
-            "tools/list" -> JsonRpcResponse(id = request.id, result = mapOf("tools" to emptyList<Any>()))
+            "tools/list" -> JsonRpcResponse(id = request.id, result = mapOf("tools" to tools.describe()))
+            "tools/call" -> handleToolsCall(request)
             else -> methodNotFoundResponse(request.id, request.method)
         }
+
+    private fun handleToolsCall(request: JsonRpcRequest): JsonRpcResponse {
+        val name =
+            request.params
+                ?.get("name")
+                ?.asText()
+                .orEmpty()
+        if (name.isBlank()) {
+            return JsonRpcResponse(
+                id = request.id,
+                error =
+                    JsonRpcError(
+                        code = JsonRpcErrorCodes.INVALID_PARAMS,
+                        message = "tools/call: missing required string 'name'",
+                    ),
+            )
+        }
+        val arguments = request.params?.get("arguments")
+        val result =
+            tools.call(name, arguments)
+                ?: return methodNotFoundResponse(request.id, "tools/call:$name")
+        return JsonRpcResponse(id = request.id, result = result)
+    }
 
     private fun handleInitialize(): Map<String, Any> =
         mapOf(
