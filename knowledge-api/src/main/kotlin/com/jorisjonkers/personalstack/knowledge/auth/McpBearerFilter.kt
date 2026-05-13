@@ -7,7 +7,6 @@ import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
-import org.springframework.stereotype.Component
 import org.springframework.web.filter.OncePerRequestFilter
 
 /**
@@ -21,8 +20,17 @@ import org.springframework.web.filter.OncePerRequestFilter
  * the response is a 401 with a small JSON-RPC error body so the
  * client transport surfaces the cause rather than treating it as a
  * transport-level disconnect.
+ *
+ * Declared as a plain class (no `@Component`) and registered as a
+ * `@Bean` in `KnowledgeApiApplication`. kotlin-common's
+ * `ApplicationTracingAspect` proxies every `@Component` with CGLIB,
+ * which can't proxy `GenericFilterBean.init(FilterConfig)` (it's
+ * final). The proxied init() left the inherited `logger` field null
+ * and crashed Tomcat startup with
+ * `Cannot invoke "Log.isDebugEnabled()" because "this.logger" is
+ * null`. The kotlin-common timing filters use the same `@Bean`
+ * trick for the same reason.
  */
-@Component
 class McpBearerFilter(
     private val properties: McpBearerProperties,
 ) : OncePerRequestFilter() {
