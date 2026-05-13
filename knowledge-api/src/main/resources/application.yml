@@ -1,0 +1,71 @@
+spring:
+  application:
+    name: knowledge-api
+  threads:
+    virtual:
+      enabled: true
+  # Phase 4a uses Vault Agent inject for static env (sourced once by the
+  # entrypoint shell), not Spring Cloud Vault's live secret refresh — so
+  # the autoconfigured client + health indicator are turned off here. The
+  # deployment.yaml can flip VAULT_ENABLED=true later when knowledge-api
+  # needs lease-aware secret rotation (e.g. the bearer-token allow-list
+  # under secret/data/knowledge-api in Phase 4b).
+  cloud:
+    vault:
+      enabled: ${VAULT_ENABLED:false}
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:knowledge_db}
+    username: ${DB_USER:kb_user}
+    password: ${DB_PASSWORD:kb_password}
+    hikari:
+      pool-name: knowledge-api-pool
+      maximum-pool-size: 5
+      minimum-idle: 2
+      connection-timeout: 10000
+      validation-timeout: 5000
+      idle-timeout: 600000
+      keepalive-time: 30000
+      max-lifetime: 1800000
+      leak-detection-threshold: 60000
+      auto-commit: true
+      data-source-properties:
+        tcpKeepAlive: true
+        socketTimeout: 30
+        connectTimeout: 10
+        loginTimeout: 10
+        ApplicationName: knowledge-api
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # LightRAG's Python ingest worker creates its own tables on first run.
+    # baselineOnMigrate lets Flyway adopt that existing schema instead of
+    # erroring on the non-empty database; baselineVersion=0 so V1+ migrations
+    # all run on a clean DB and skip on a worker-seeded one.
+    baseline-on-migrate: true
+    baseline-version: '0'
+  jooq:
+    sql-dialect: postgres
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, prometheus
+      base-path: /api/actuator
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      # Per-contributor details on the composite endpoint. `always` is fine
+      # because /api/actuator/health is only reachable inside the cluster
+      # (or via SSO-protected ingress) — same posture auth-api uses.
+      show-details: always
+      show-components: always
+      group:
+        readiness:
+          include: readinessState, db
+
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    context-path: /
