@@ -1,21 +1,28 @@
 package com.jorisjonkers.personalstack.knowledge.repo
 
 import com.jorisjonkers.personalstack.knowledge.domain.KbNote
+import com.jorisjonkers.personalstack.knowledge.domain.KbNoteType
+import com.jorisjonkers.personalstack.knowledge.domain.KbRelation
 import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbNoteTags.KB_NOTE_TAGS
 import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbNotes.KB_NOTES
+import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbRelations.KB_RELATIONS
+import com.jorisjonkers.personalstack.knowledge.jooq.tables.records.KbNotesRecord
 import org.jooq.DSLContext
 import org.springframework.stereotype.Repository
+import tools.jackson.databind.json.JsonMapper
+import tools.jackson.module.kotlin.KotlinModule
+import java.time.Instant
 import java.time.ZoneOffset
 
-/**
- * Write-path repo for the canonical kb_notes + kb_note_tags rows. The
- * read side (recall / get / list_recent / find_conflicts) lands in a
- * follow-up PR alongside the hybrid pgvector+tsvector query.
- */
 @Repository
 class NoteRepository(
     private val dsl: DSLContext,
 ) {
+    private val jsonMapper: JsonMapper =
+        JsonMapper.builder().addModule(KotlinModule.Builder().build()).build()
+
+    // -------- write path --------
+
     fun create(note: KbNote): KbNote {
         val capturedAt = note.capturedAt.atOffset(ZoneOffset.UTC).toLocalDateTime()
         dsl
@@ -47,6 +54,17 @@ class NoteRepository(
         return note
     }
 
+    // -------- read path --------
+
+    fun findById(id: String): KbNote? {
+        val record =
+            dsl
+                .selectFrom(KB_NOTES)
+                .where(KB_NOTES.ID.eq(id))
+                .fetchOne() ?: return null
+        return record.toDomain(tagsOf(id))
+    }
+
     fun tagsOf(noteId: String): Set<String> =
         dsl
             .select(KB_NOTE_TAGS.TAG)
@@ -58,27 +76,119 @@ class NoteRepository(
 
     fun rowCount(): Int = dsl.fetchCount(KB_NOTES)
 
-    @Suppress("ReturnCount")
-    fun findByIdRaw(id: String): Map<String, Any?>? {
-        val record =
+    /**
+     * Recent-first listing scoped optionally by `scope` and `type`.
+     * ULIDs sort lex by capture time, so `ORDER BY id DESC` doubles as
+     * a recency index without an extra column (see V1 migration head).
+     */
+    fun listRecent(
+        scope: String?,
+        type: KbNoteType?,
+        limit: Int,
+    ): List<KbNote> {
+        var query =
             dsl
                 .selectFrom(KB_NOTES)
-                .where(KB_NOTES.ID.eq(id))
-                .fetchOne() ?: return null
-        return mapOf(
-            "id" to record.id,
-            "type" to record.type,
-            "scope" to record.scope,
-            "source" to record.source,
-            "captured_at" to record.capturedAt?.toInstant(ZoneOffset.UTC)?.toString(),
-            "session_id" to record.sessionId,
-            "confidence" to record.confidence?.toDouble(),
-            "title" to record.title,
-            "body" to record.body,
-            "vault_path" to record.vaultPath,
-            "vault_commit" to record.vaultCommit,
-            "created_at" to record.createdAt?.toInstant(ZoneOffset.UTC)?.toString(),
-            "updated_at" to record.updatedAt?.toInstant(ZoneOffset.UTC)?.toString(),
+                .where(
+                    org.jooq.impl.DSL
+                        .noCondition(),
+                )
+        if (scope != null) query = query.and(KB_NOTES.SCOPE.eq(scope))
+        if (type != null) query = query.and(KB_NOTES.TYPE.eq(type.wire))
+        val records = query.orderBy(KB_NOTES.ID.desc()).limit(limit).fetch()
+        // Bulk-load tags for the returned ids in one query rather than
+        // N+1.
+        val ids = records.map { it.id ?: "" }.filter { it.isNotBlank() }
+        val tagMap = bulkTags(ids)
+        return records.map { it.toDomain(tagMap[it.id].orEmpty()) }
+    }
+
+    /**
+     * Relations either pointing into or out of `id` whose predicate is
+     * one of the conflict markers. The MCP `find_conflicts` tool exposes
+     * exactly this; the schema keeps room for `derived_from`,
+     * `mentions`, etc. but those aren't conflicts.
+     */
+    fun findConflicts(id: String): List<KbRelation> =
+        dsl
+            .selectFrom(KB_RELATIONS)
+            .where(
+                KB_RELATIONS.SUBJECT_ID
+                    .eq(id)
+                    .or(KB_RELATIONS.OBJECT_ID.eq(id)),
+            ).and(KB_RELATIONS.PREDICATE.`in`(CONFLICT_PREDICATES))
+            .fetch()
+            .map { record ->
+                KbRelation(
+                    subjectId = record.subjectId ?: "",
+                    predicate = record.predicate ?: "",
+                    objectId = record.objectId ?: "",
+                    props = parseProps(record.props),
+                    createdAt =
+                        record.createdAt?.toInstant(ZoneOffset.UTC) ?: Instant.EPOCH,
+                )
+            }
+
+    /**
+     * Insert helper for tests + the soon-to-arrive `link` tool. Keeps
+     * `kb_relations.props` as a JSON-encoded TEXT column (the V1 schema
+     * deliberately avoided JSONB to stay inside jOOQ's DDLDatabase
+     * subset). Callers must not insert duplicate
+     * `(subject_id, predicate, object_id)` tuples — the PK enforces
+     * uniqueness and an upsert variant lands when the `link` MCP tool
+     * does.
+     */
+    fun insertRelation(relation: KbRelation) {
+        dsl
+            .insertInto(KB_RELATIONS)
+            .set(KB_RELATIONS.SUBJECT_ID, relation.subjectId)
+            .set(KB_RELATIONS.PREDICATE, relation.predicate)
+            .set(KB_RELATIONS.OBJECT_ID, relation.objectId)
+            .set(KB_RELATIONS.PROPS, jsonMapper.writeValueAsString(relation.props))
+            .set(KB_RELATIONS.CREATED_AT, relation.createdAt.atOffset(ZoneOffset.UTC).toLocalDateTime())
+            .execute()
+    }
+
+    // -------- helpers --------
+
+    private fun bulkTags(ids: List<String>): Map<String, Set<String>> {
+        if (ids.isEmpty()) return emptyMap()
+        return dsl
+            .select(KB_NOTE_TAGS.NOTE_ID, KB_NOTE_TAGS.TAG)
+            .from(KB_NOTE_TAGS)
+            .where(KB_NOTE_TAGS.NOTE_ID.`in`(ids))
+            .fetch()
+            .groupBy({ it.value1() ?: "" }, { it.value2() ?: "" })
+            .mapValues { (_, tags) -> tags.filter { it.isNotBlank() }.toSet() }
+    }
+
+    private fun KbNotesRecord.toDomain(tags: Set<String>): KbNote =
+        KbNote(
+            id = id ?: error("kb_notes row missing id"),
+            type = KbNoteType.fromWire(type ?: error("kb_notes row missing type")),
+            scope = scope ?: "",
+            source = source ?: "",
+            capturedAt = capturedAt?.toInstant(ZoneOffset.UTC) ?: Instant.EPOCH,
+            sessionId = sessionId,
+            confidence = confidence?.toDouble() ?: 0.0,
+            title = title ?: "",
+            body = body ?: "",
+            vaultPath = vaultPath ?: "",
+            vaultCommit = vaultCommit,
+            tags = tags,
         )
+
+    @Suppress("UNCHECKED_CAST", "SwallowedException")
+    private fun parseProps(raw: String?): Map<String, Any?> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return try {
+            jsonMapper.readValue(raw, Map::class.java) as Map<String, Any?>
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    companion object {
+        private val CONFLICT_PREDICATES = listOf("supersedes", "contradicts")
     }
 }

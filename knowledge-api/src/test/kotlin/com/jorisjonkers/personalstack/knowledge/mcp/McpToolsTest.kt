@@ -6,6 +6,9 @@ import com.jorisjonkers.personalstack.knowledge.capture.CaptureRequest
 import com.jorisjonkers.personalstack.knowledge.capture.CaptureService
 import com.jorisjonkers.personalstack.knowledge.domain.KbNote
 import com.jorisjonkers.personalstack.knowledge.domain.KbNoteType
+import com.jorisjonkers.personalstack.knowledge.domain.KbRelation
+import com.jorisjonkers.personalstack.knowledge.domain.RecallHit
+import com.jorisjonkers.personalstack.knowledge.recall.RecallService
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -18,7 +21,12 @@ import java.time.Instant
 
 class McpToolsTest {
     private val captureService = mockk<CaptureService>()
-    private val tools = McpTools(captureService)
+    private val recallService = mockk<RecallService>(relaxed = true)
+
+    // Wire real CaptureMcpTools/ReadMcpTools around the mocked services
+    // — that's what Spring does in production and what gives us coverage
+    // of the descriptor builders + handler argument parsing.
+    private val tools = McpTools(CaptureMcpTools(captureService), ReadMcpTools(recallService))
     private val mapper: JsonMapper = JsonMapper.builder().addModule(KotlinModule.Builder().build()).build()
 
     private val stubNote =
@@ -37,18 +45,24 @@ class McpToolsTest {
         )
 
     @Test
-    fun `describe advertises three tools with the expected names`() {
+    fun `describe advertises capture and read tools by name`() {
         val names = tools.describe().map { it["name"] as String }
         assertThat(names).containsExactlyInAnyOrder(
             "knowledge.capture_lesson",
             "knowledge.capture_decision",
             "knowledge.ingest_note",
+            "knowledge.recall",
+            "knowledge.get_note",
+            "knowledge.list_recent",
+            "knowledge.find_conflicts",
         )
     }
 
     @Test
-    fun `descriptors are valid JSON Schema with required and properties`() {
-        tools.describe().forEach { descriptor ->
+    fun `capture tool descriptors are valid JSON Schema with the shared required and properties`() {
+        val captureNames =
+            setOf("knowledge.capture_lesson", "knowledge.capture_decision", "knowledge.ingest_note")
+        tools.describe().filter { it["name"] in captureNames }.forEach { descriptor ->
             val schema = descriptor["inputSchema"] as Map<*, *>
             assertThat(schema["type"]).isEqualTo("object")
             @Suppress("UNCHECKED_CAST")
@@ -58,6 +72,87 @@ class McpToolsTest {
             val properties = schema["properties"] as Map<String, Any>
             assertThat(properties.keys).contains("scope", "title", "body", "session_id", "confidence", "vault_path")
         }
+    }
+
+    @Test
+    fun `read tool descriptors expose their own required and properties shape`() {
+        val recall = tools.describe().single { it["name"] == "knowledge.recall" }
+
+        @Suppress("UNCHECKED_CAST")
+        val recallSchema = recall["inputSchema"] as Map<String, Any>
+        assertThat(recallSchema["required"] as List<*>).containsExactly("query")
+        assertThat((recallSchema["properties"] as Map<*, *>).keys).contains("query", "scope", "limit")
+
+        val findConflicts = tools.describe().single { it["name"] == "knowledge.find_conflicts" }
+
+        @Suppress("UNCHECKED_CAST")
+        val fcSchema = findConflicts["inputSchema"] as Map<String, Any>
+        assertThat(fcSchema["required"] as List<*>).containsExactly("id")
+    }
+
+    @Test
+    fun `recall forwards parsed args and returns hits projection`() {
+        every { recallService.recall("rockets", "personal", 5) } returns
+            listOf(
+                RecallHit(
+                    id = "01HXY",
+                    type = "lesson",
+                    scope = "personal",
+                    title = "t",
+                    snippet = "s",
+                    score = 0.42,
+                ),
+            )
+
+        val out =
+            tools.call(
+                "knowledge.recall",
+                mapper.readTree("""{"query":"rockets","scope":"personal","limit":5}"""),
+            )!!
+
+        @Suppress("UNCHECKED_CAST")
+        val hits = out["hits"] as List<Map<String, Any?>>
+        assertThat(hits).hasSize(1)
+        assertThat(hits[0]["id"]).isEqualTo("01HXY")
+        assertThat(hits[0]["score"]).isEqualTo(0.42)
+    }
+
+    @Test
+    fun `get_note returns the wrapped note or a null marker`() {
+        every { recallService.getNote("01HXY") } returns null
+        val out = tools.call("knowledge.get_note", mapper.readTree("""{"id":"01HXY"}"""))!!
+        assertThat(out["note"]).isNull()
+    }
+
+    @Test
+    fun `list_recent parses optional type filter as a KbNoteType`() {
+        every { recallService.listRecent(null, KbNoteType.DECISION, 7) } returns emptyList()
+        tools.call(
+            "knowledge.list_recent",
+            mapper.readTree("""{"type":"decision","limit":7}"""),
+        )
+        verify(exactly = 1) { recallService.listRecent(null, KbNoteType.DECISION, 7) }
+    }
+
+    @Test
+    fun `find_conflicts projects each relation to a flat map`() {
+        every { recallService.findConflicts("01HXY") } returns
+            listOf(
+                KbRelation(
+                    subjectId = "01HXY",
+                    predicate = "supersedes",
+                    objectId = "01ABC",
+                    props = mapOf("note" to "rotation"),
+                    createdAt = Instant.parse("2026-05-13T12:00:00Z"),
+                ),
+            )
+        val out = tools.call("knowledge.find_conflicts", mapper.readTree("""{"id":"01HXY"}"""))!!
+
+        @Suppress("UNCHECKED_CAST")
+        val rels = out["relations"] as List<Map<String, Any?>>
+        assertThat(rels).hasSize(1)
+        assertThat(rels[0]["predicate"]).isEqualTo("supersedes")
+        assertThat(rels[0]["object_id"]).isEqualTo("01ABC")
     }
 
     @Test

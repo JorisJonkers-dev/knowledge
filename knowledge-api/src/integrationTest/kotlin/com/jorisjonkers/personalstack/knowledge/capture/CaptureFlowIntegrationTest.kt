@@ -106,10 +106,10 @@ class CaptureFlowIntegrationTest : IntegrationTestBase() {
         assertThat(result["scope"].asText()).isEqualTo("personal")
 
         assertThat(noteRepository.rowCount()).isEqualTo(before + 1)
-        val row = noteRepository.findByIdRaw(id)!!
-        assertThat(row["title"]).isEqualTo("lesson title")
-        assertThat(row["type"]).isEqualTo("lesson")
-        assertThat(noteRepository.tagsOf(id)).containsExactlyInAnyOrder("kotlin", "mcp")
+        val row = noteRepository.findById(id)!!
+        assertThat(row.title).isEqualTo("lesson title")
+        assertThat(row.type.wire).isEqualTo("lesson")
+        assertThat(row.tags).containsExactlyInAnyOrder("kotlin", "mcp")
 
         val (routingKey, payload) = await1QueueMessage()
         assertThat(routingKey).isEqualTo(IngestQueueConfig.ROUTING_LESSON)
@@ -141,9 +141,9 @@ class CaptureFlowIntegrationTest : IntegrationTestBase() {
         val (routingKey, payload) = await1QueueMessage()
         assertThat(routingKey).isEqualTo(IngestQueueConfig.ROUTING_DECISION)
         assertThat(payload["type"]).isEqualTo("decision")
-        val row = noteRepository.findByIdRaw(payload["id"] as String)!!
-        assertThat(row["type"]).isEqualTo("decision")
-        assertThat(row["scope"]).isEqualTo("project:personal-stack")
+        val row = noteRepository.findById(payload["id"] as String)!!
+        assertThat(row.type.wire).isEqualTo("decision")
+        assertThat(row.scope).isEqualTo("project:personal-stack")
     }
 
     @Test
