@@ -91,11 +91,7 @@ class CaptureMcpTools(
 
     private fun baseProperties(): Map<String, Any> =
         mapOf(
-            "scope" to
-                mapOf(
-                    "type" to "string",
-                    "description" to "Access boundary: personal, work, agent:<name>, project:<repo>, …",
-                ),
+            "scope" to mapOf("type" to "string", "description" to SCOPE_DESCRIPTION),
             "title" to mapOf("type" to "string"),
             "body" to mapOf("type" to "string"),
             "session_id" to
@@ -144,4 +140,17 @@ class CaptureMcpTools(
             "captured_at" to note.capturedAt.toString(),
             "vault_path" to note.vaultPath,
         )
+
+    private companion object {
+        private const val SCOPE_DESCRIPTION =
+            "Access boundary. Conventional values: " +
+                "`personal` (cross-project lessons), " +
+                "`work`, " +
+                "`agent:<name>` (guidance aimed at an assistant), " +
+                "`project:<github-repo-name>` where the repo name is the last " +
+                "path segment of the origin remote URL minus a trailing `.git` " +
+                "(so a clone of `git@github.com:ExtraToast/personal-stack.git` " +
+                "uses `project:personal-stack`). One identifier per repo, " +
+                "regardless of working-directory rename."
+    }
 }
