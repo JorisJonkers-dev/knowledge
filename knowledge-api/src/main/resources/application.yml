@@ -13,6 +13,16 @@ spring:
   cloud:
     vault:
       enabled: ${VAULT_ENABLED:false}
+  # AMQP — IngestPublisher.convertAndSend lands here for every
+  # capture_*/ingest_note MCP call. Without explicit host config Spring
+  # Boot defaults to localhost:5672 which doesn't exist in the pod, so
+  # every capture INSERTs the kb_notes row but then 500s on publish.
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:knowledge_db}
     username: ${DB_USER:kb_user}

@@ -99,8 +99,9 @@ not just personal-stack-2).
 ### Sanity check
 
 ```bash
-# Hooks can reach the MCP:
-curl -sS -m 3 \
+# Hooks can reach the MCP. DNS for kb.jorisjonkers.dev can take a
+# few seconds on a cold cache, so use a generous connect-timeout:
+curl -sS --connect-timeout 8 --max-time 10 \
   -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}' \
