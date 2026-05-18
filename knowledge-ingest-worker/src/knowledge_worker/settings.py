@@ -29,6 +29,12 @@ class Settings:
     vault_ssh_key_path: str
     vault_author_name: str
     vault_author_email: str
+    kb_persist_enabled: bool
+    db_host: str
+    db_port: int
+    db_name: str
+    db_user: str
+    db_password: str
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Settings:
@@ -67,4 +73,14 @@ class Settings:
             vault_ssh_key_path=e.get("VAULT_SSH_KEY_PATH", "/etc/git-secrets/id_ed25519"),
             vault_author_name=e.get("VAULT_AUTHOR_NAME", "knowledge-ingest-worker"),
             vault_author_email=e.get("VAULT_AUTHOR_EMAIL", "worker@knowledge.local"),
+            # kb_notes write-back. When disabled the worker still
+            # commits to git but skips the Postgres UPDATE — useful
+            # for local smoke runs without a knowledge_db reachable.
+            kb_persist_enabled=e.get("KB_PERSIST_ENABLED", "false").lower()
+            in ("1", "true", "yes"),
+            db_host=e.get("DB_HOST", "postgres.data-system.svc.cluster.local"),
+            db_port=int(e.get("DB_PORT", "5432")),
+            db_name=e.get("DB_NAME", "knowledge_db"),
+            db_user=e.get("DB_USER", "kb_user"),
+            db_password=e.get("DB_PASSWORD", "kb_password"),
         )

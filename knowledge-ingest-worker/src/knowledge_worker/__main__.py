@@ -20,8 +20,25 @@ from git import Actor
 from knowledge_worker.consumer import Consumer, silence_pika_warning_logs
 from knowledge_worker.handlers import Handler, LoggingHandler, VaultHandler
 from knowledge_worker.settings import Settings
+from knowledge_worker.store import NoteStore, NullNoteStore, PostgresNoteStore
 from knowledge_worker.telemetry import configure as configure_telemetry
 from knowledge_worker.vault import VaultGitWriter
+
+
+def _build_store(settings: Settings, log: structlog.BoundLogger) -> NoteStore:
+    if not settings.kb_persist_enabled:
+        log.info("handler.store.disabled")
+        return NullNoteStore()
+    store = PostgresNoteStore(
+        host=settings.db_host,
+        port=settings.db_port,
+        database=settings.db_name,
+        user=settings.db_user,
+        password=settings.db_password,
+    )
+    store.open()
+    log.info("handler.store.ready", host=settings.db_host, db=settings.db_name)
+    return store
 
 
 def _build_handler(settings: Settings, log: structlog.BoundLogger) -> Handler:
@@ -37,8 +54,9 @@ def _build_handler(settings: Settings, log: structlog.BoundLogger) -> Handler:
         push=True,
     )
     writer.open()
+    store = _build_store(settings, log)
     log.info("handler.vault.ready", clone=settings.vault_clone_dir)
-    return VaultHandler(writer)
+    return VaultHandler(writer, store)
 
 
 def main() -> int:
