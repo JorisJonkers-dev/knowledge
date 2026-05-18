@@ -48,9 +48,7 @@ class _RecordingStore:
         self.updates: list[tuple[str, str, str]] = []
         self._affected = affected
 
-    def update_vault_pointer(
-        self, note_id: str, vault_path: str, vault_commit: str
-    ) -> int:
+    def update_vault_pointer(self, note_id: str, vault_path: str, vault_commit: str) -> int:
         self.updates.append((note_id, vault_path, vault_commit))
         return self._affected
 
@@ -65,9 +63,7 @@ def test_vault_handler_delegates_to_writer_and_updates_store() -> None:
 
 def test_vault_handler_logs_orphan_when_no_row_updated() -> None:
     # Zero-row updates fall through (logged as orphan) — no exception.
-    VaultHandler(_StubWriter(), _RecordingStore(affected=0)).handle(
-        "knowledge.lesson", _note()
-    )
+    VaultHandler(_StubWriter(), _RecordingStore(affected=0)).handle("knowledge.lesson", _note())
 
 
 def test_vault_handler_propagates_writer_failure() -> None:

@@ -7,7 +7,7 @@ import pytest
 from git import Actor, Repo
 
 from knowledge_worker.messages import CapturedNote
-from knowledge_worker.vault import VaultGitWriter, _slug
+from knowledge_worker.vault import VaultGitWriter, _slug, _title_slug
 
 
 def _note(**overrides: object) -> CapturedNote:
@@ -65,6 +65,20 @@ def test_slug_normalises_unsafe_characters() -> None:
     assert _slug("personal") == "personal"
 
 
+def test_title_slug_kebab_cases_and_truncates_at_word_boundary() -> None:
+    assert _title_slug("Render scripts must run") == "render-scripts-must-run"
+    assert _title_slug("claude mcp add: --header is variadic") == (
+        "claude-mcp-add-header-is-variadic"
+    )
+    assert _title_slug("  ") == ""
+    long_title = "a very very long title that keeps going on and never quite stops indeed"
+    slug = _title_slug(long_title)
+    assert len(slug) <= 60
+    # Truncation should land on a word boundary, not mid-word.
+    assert not slug.endswith("ne")  # would imply mid-word cut from "never"
+    assert slug.endswith(("-", "going", "and", "stops")) or "-" in slug
+
+
 def test_open_clones_when_directory_missing(tmp_path: Path, remote: Path) -> None:
     clone = tmp_path / "fresh"
     w = VaultGitWriter(
@@ -89,7 +103,7 @@ def test_open_attaches_existing_clone(tmp_path: Path, remote: Path) -> None:
 def test_write_creates_file_with_frontmatter(writer: VaultGitWriter, tmp_path: Path) -> None:
     result = writer.write(_note())
 
-    assert result.relative_path == "notes/personal/lesson/01HXYZ00000000000000000000.md"
+    assert result.relative_path == ("_inbox/2026-05-13/120000-render-scripts-must-run--01HXYZ00.md")
     target = tmp_path / "clone" / result.relative_path
     content = target.read_text(encoding="utf-8")
     assert content.startswith("---\n")
@@ -103,30 +117,38 @@ def test_write_creates_file_with_frontmatter(writer: VaultGitWriter, tmp_path: P
     assert "Five render scripts gate" in content
 
 
-def test_write_commit_message_uses_worker_prefix(writer: VaultGitWriter, tmp_path: Path) -> None:
+def test_write_commit_message_uses_worker_inbox_prefix(
+    writer: VaultGitWriter, tmp_path: Path
+) -> None:
     writer.write(_note(scope="project:personal-stack-2", id="01ABC", type="decision"))
     repo = Repo(tmp_path / "clone")
     head = repo.head.commit
-    assert head.message.strip() == "worker(project:personal-stack-2): decision 01ABC"
+    # Worker no longer encodes scope into the commit message — the
+    # curator owns scope assignment after promoting out of `_inbox/`.
+    assert head.message.strip() == "worker(inbox): decision render-scripts-must-run"
     assert head.author.name == "worker"
 
 
 def test_write_pushes_to_remote(writer: VaultGitWriter, remote: Path, tmp_path: Path) -> None:
-    writer.write(_note(id="01PUSHED"))
+    writer.write(_note(id="01PUSHED0000000000000000000", title="A pushed note"))
 
     # Re-clone the remote in a second working tree and confirm the
     # commit landed.
     verify = tmp_path / "verify"
     Repo.clone_from(remote, verify, branch="main")
-    rel = "notes/personal/lesson/01PUSHED.md"
+    rel = "_inbox/2026-05-13/120000-a-pushed-note--01PUSHED.md"
     assert (verify / rel).exists()
     log = list(Repo(verify).iter_commits("main"))
-    assert any("01PUSHED" in c.message for c in log)
+    assert any("a-pushed-note" in c.message for c in log)
 
 
-def test_write_slugifies_scope_for_path(writer: VaultGitWriter, tmp_path: Path) -> None:
-    result = writer.write(_note(scope="agent:_shared/foo", id="01SCOPE"))
-    assert result.relative_path == "notes/agent-_shared-foo/lesson/01SCOPE.md"
+def test_write_path_ignores_scope_until_curator_promotes(
+    writer: VaultGitWriter, tmp_path: Path
+) -> None:
+    # The worker's path no longer depends on `scope` at all — the
+    # curator decides scope (and the final folder) after triage.
+    result = writer.write(_note(scope="agent:_shared/foo", id="01SCOPE0000000000000000000"))
+    assert result.relative_path == ("_inbox/2026-05-13/120000-render-scripts-must-run--01SCOPE0.md")
     assert (tmp_path / "clone" / result.relative_path).exists()
 
 

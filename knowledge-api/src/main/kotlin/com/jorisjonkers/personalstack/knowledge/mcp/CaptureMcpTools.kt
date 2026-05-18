@@ -85,7 +85,10 @@ class CaptureMcpTools(
         toolDescriptor(
             name = name,
             description = description,
-            required = listOf("scope", "title", "body"),
+            // `scope` is optional now: when omitted the note lands with
+            // `scope=_inbox` and the curator agent assigns the final
+            // value during the classify-and-promote pass.
+            required = listOf("title", "body"),
             properties = baseProperties() + extra,
         )
 
@@ -121,7 +124,7 @@ class CaptureMcpTools(
     ): CaptureRequest =
         CaptureRequest(
             type = typeOverride ?: KbNoteType.LESSON,
-            scope = JsonArguments.requireString(args, "scope"),
+            scope = JsonArguments.optionalString(args, "scope") ?: INBOX_SCOPE,
             source = JsonArguments.optionalString(args, "source") ?: defaultSource,
             title = JsonArguments.requireString(args, "title"),
             body = JsonArguments.requireString(args, "body"),
@@ -142,15 +145,18 @@ class CaptureMcpTools(
         )
 
     private companion object {
+        private const val INBOX_SCOPE = "_inbox"
         private const val SCOPE_DESCRIPTION =
-            "Access boundary. Conventional values: " +
-                "`personal` (cross-project lessons), " +
-                "`work`, " +
-                "`agent:<name>` (guidance aimed at an assistant), " +
-                "`project:<github-repo-name>` where the repo name is the last " +
-                "path segment of the origin remote URL minus a trailing `.git` " +
-                "(so a clone of `git@github.com:ExtraToast/personal-stack.git` " +
-                "uses `project:personal-stack`). One identifier per repo, " +
-                "regardless of working-directory rename."
+            "Access boundary. Optional — when unset, captures land in `_inbox` and the " +
+                "curator agent assigns the final scope. Explicit values: " +
+                "`topic:<topic-slug>` for general info about a language / framework / tool " +
+                "(curator-assigned topic from the closed vocabulary at " +
+                "`platform/cluster/flux/apps/knowledge/knowledge-curator/topics.yaml`); " +
+                "`project:<github-repo-name>` where the repo name is the last path segment " +
+                "of the origin remote URL minus a trailing `.git` (so a clone of " +
+                "`git@github.com:ExtraToast/personal-stack.git` uses `project:personal-stack`); " +
+                "`agent:<name>` for guidance aimed at an assistant; " +
+                "`personal` and `work` remain accepted but are deprecated — prefer " +
+                "topic / project scopes."
     }
 }

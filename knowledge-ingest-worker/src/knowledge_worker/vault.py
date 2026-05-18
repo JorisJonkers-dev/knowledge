@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass
+from datetime import UTC
 from pathlib import Path
 from typing import Protocol
 
@@ -29,6 +30,17 @@ import structlog
 from git import Actor, GitCommandError, Repo
 
 from knowledge_worker.messages import CapturedNote
+
+# 8 characters of a ULID still uniquely identify ~10^12 captures in
+# practice, more than enough to disambiguate two notes that share a
+# title within the same second. The filename collision rate at that
+# scale is well below the human-edit cadence.
+ID_FILENAME_PREFIX = 8
+
+# Hard cap on the kebab slug we derive from a title. 60 chars leaves
+# room for the timestamp prefix and the `--id8` suffix without
+# pushing past the 100-char comfort zone for Obsidian + file pickers.
+TITLE_SLUG_MAX_CHARS = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,16 +145,26 @@ class VaultGitWriter:
 
     @staticmethod
     def _relative_path(note: CapturedNote) -> str:
-        """Render to ``notes/<scope>/<type>/<id>.md``.
+        """Render to ``_inbox/<YYYY-MM-DD>/<HHMMSS>-<title-slug>--<id8>.md``.
 
-        Slashes in ``scope`` (e.g. ``project:personal-stack``) become
-        hyphens to keep the directory shape flat. The ULID is the
-        filename so future supersedes-chains can locate the note by id
-        regardless of title edits.
+        Captures land in `_inbox/` first, then a separate curator
+        agent promotes them to `topics/<topic>/<slug>.md` or
+        `projects/<repo>/<slug>.md` after classifying. Until then,
+        the path documents both *when* and *what* (via the slug) the
+        capture is, while keeping the leading numeric prefix so
+        chronologically-sorted directory listings just work.
+
+        The ``--<id8>`` suffix is the first 8 chars of the ULID — keeps
+        the filename unique even if two captures share a title within
+        the same second.
         """
 
-        scope = _slug(note.scope)
-        return f"notes/{scope}/{note.type}/{note.id}.md"
+        captured = note.captured_at.astimezone(UTC)
+        day = captured.strftime("%Y-%m-%d")
+        time = captured.strftime("%H%M%S")
+        slug = _title_slug(note.title) or "untitled"
+        id_suffix = note.id[:ID_FILENAME_PREFIX]
+        return f"_inbox/{day}/{time}-{slug}--{id_suffix}.md"
 
     def _render_markdown(self, note: CapturedNote) -> str:
         # YAML frontmatter — keep one key per line, no nesting, so
@@ -173,11 +195,13 @@ class VaultGitWriter:
 
     @staticmethod
     def _commit_message(note: CapturedNote) -> str:
-        # `worker(<scope>): <type> <id>` — distinguishable from the
+        # `worker(inbox): <type> <slug>` — distinguishable from the
         # human `vault(<host>): …` commits the Obsidian Git plugin
-        # writes. `git log --grep '^worker('` filters worker commits
-        # for backfill or audit.
-        return f"worker({note.scope}): {note.type} {note.id}"
+        # writes, and from the curator's `curator(<scope>): …` commits
+        # once it promotes notes out of the inbox. Filter worker
+        # captures with `git log --grep '^worker(inbox)'`.
+        slug = _title_slug(note.title) or note.id[:ID_FILENAME_PREFIX]
+        return f"worker(inbox): {note.type} {slug}"
 
     def _git_env(self) -> dict[str, str]:
         env = dict(os.environ)
@@ -203,6 +227,29 @@ def _slug(scope: str) -> str:
     """
 
     return re.sub(r"[^A-Za-z0-9_.\-]+", "-", scope).strip("-")
+
+
+def _title_slug(title: str) -> str:
+    """Kebab-case slug derived from a note title.
+
+    Lower-cases, collapses any non-alphanumeric runs to a single `-`,
+    strips leading/trailing dashes, then truncates at a word boundary
+    so the result is human-readable. Empty input or input that
+    contains no alphanumeric characters returns ``""`` — callers
+    fall back to an id-derived stub.
+    """
+
+    cleaned = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    if len(cleaned) <= TITLE_SLUG_MAX_CHARS:
+        return cleaned
+    truncated = cleaned[:TITLE_SLUG_MAX_CHARS]
+    # Walk back to the last `-` so we don't end mid-word, unless that
+    # would leave us with less than half the cap (e.g. a single very
+    # long word) — in which case the hard cap wins.
+    last_dash = truncated.rfind("-")
+    if last_dash >= TITLE_SLUG_MAX_CHARS // 2:
+        return truncated[:last_dash]
+    return truncated
 
 
 def reset_clone_dir(path: Path) -> None:

@@ -67,7 +67,10 @@ class McpToolsTest {
             assertThat(schema["type"]).isEqualTo("object")
             @Suppress("UNCHECKED_CAST")
             val required = schema["required"] as List<String>
-            assertThat(required).containsExactlyInAnyOrder("scope", "title", "body")
+            // `scope` is optional now: omitted captures default to
+            // `_inbox` and the curator agent assigns the final scope
+            // during the classify-and-promote pass.
+            assertThat(required).containsExactlyInAnyOrder("title", "body")
             @Suppress("UNCHECKED_CAST")
             val properties = schema["properties"] as Map<String, Any>
             assertThat(properties.keys).contains("scope", "title", "body", "session_id", "confidence", "vault_path")
@@ -229,12 +232,27 @@ class McpToolsTest {
 
     @Test
     fun `missing required field surfaces an error from the parser`() {
-        val args = mapper.readTree("""{"title":"only title"}""")
+        // `title` is required even after the scope relaxation; only
+        // `scope` was moved out of the required list.
+        val args = mapper.readTree("""{"body":"only body, no title"}""")
 
         org.assertj.core.api.Assertions
             .assertThatThrownBy { tools.call("knowledge.capture_lesson", args) }
             .isInstanceOf(IllegalStateException::class.java)
             .hasMessageContaining("missing required field")
+    }
+
+    @Test
+    fun `omitted scope defaults to _inbox so the curator can classify after capture`() {
+        val captured = slot<CaptureRequest>()
+        every { captureService.captureLesson(capture(captured)) } returns stubNote
+
+        tools.call(
+            "knowledge.capture_lesson",
+            mapper.readTree("""{"title":"t","body":"b"}"""),
+        )
+
+        assertThat(captured.captured.scope).isEqualTo("_inbox")
     }
 
     @Test
