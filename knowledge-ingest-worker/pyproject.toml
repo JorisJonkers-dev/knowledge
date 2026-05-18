@@ -1,0 +1,104 @@
+[project]
+name = "knowledge-ingest-worker"
+version = "0.1.0"
+description = "RabbitMQ-driven worker that materialises knowledge-api captures into the knowledge-vault git repo and the LightRAG-managed pgvector tables."
+requires-python = ">=3.12"
+dependencies = [
+  # Headless AMQP consumer. pika is the canonical Python client and has
+  # the simplest mental model for a single-consumer service (no asyncio
+  # tax, no aiormq quirks).
+  "pika>=1.3.2,<2",
+  # Typed message envelopes. Pydantic v2 doubles as the JSON parser so
+  # we don't end up dispatching on raw dicts.
+  "pydantic>=2.9.0,<3",
+  # Structured logging — same JSON shape as the Spring services so
+  # Loki queries can fan across the stack.
+  "structlog>=24.4.0,<26",
+  # OpenTelemetry SDK + auto-instrumentation. Run the worker via
+  # `opentelemetry-instrument python -m knowledge_worker` and pika +
+  # logging spans appear in Tempo with the same trace shape the JVM
+  # services emit.
+  "opentelemetry-distro>=0.48b0,<0.60",
+  "opentelemetry-exporter-otlp>=1.27.0,<2",
+  "opentelemetry-instrumentation-pika>=0.48b0,<0.60",
+  # Postgres driver for the eventual jOOQ-co-located writes. Brought
+  # in now so the connection-pool wiring lands together with the
+  # consumer skeleton; the SQL queries come in Phase 5-3 (LightRAG).
+  "psycopg[binary,pool]>=3.2.0,<4",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.0,<9",
+  "pytest-cov>=5.0.0,<7",
+  "pytest-timeout>=2.3.0,<3",
+  "ruff>=0.6.0,<1",
+  "mypy>=1.11.0,<2",
+  # Testcontainers + a real RabbitMQ broker per integration test, same
+  # shape as the Kotlin services use.
+  "testcontainers[rabbitmq,postgres]>=4.8.0,<5",
+]
+
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/knowledge_worker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: requires Docker (Testcontainers); slower",
+]
+# Default to unit-only on plain `pytest`; CI runs `pytest -m integration`
+# in a separate matrix entry against the full Testcontainers stack.
+addopts = "-q --strict-markers --strict-config --timeout=60 -m 'not integration'"
+
+[tool.coverage.run]
+source = ["src/knowledge_worker"]
+branch = true
+
+[tool.coverage.report]
+# Matches the 80 % jacoco threshold the JVM services enforce — same
+# rule from `feedback_service_test_policy` memory.
+fail_under = 80
+show_missing = true
+skip_covered = false
+exclude_lines = [
+  "pragma: no cover",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "W",      # pyflakes + pycodestyle
+  "I",                # isort
+  "B",                # bugbear
+  "UP",               # pyupgrade
+  "SIM",              # simplifications
+  "ANN",              # missing type annotations
+  "RUF",              # ruff-specific
+]
+ignore = [
+  "ANN401",  # `Any` is sometimes the honest annotation (e.g. message payloads).
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]  # tests don't need explicit type annotations on every fixture.
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/knowledge_worker"]
+
+# pika ships no py.typed marker. Treat its imports as Any rather than
+# block strict mode on a transitive library limitation.
+[[tool.mypy.overrides]]
+module = ["pika", "pika.*"]
+ignore_missing_imports = true
