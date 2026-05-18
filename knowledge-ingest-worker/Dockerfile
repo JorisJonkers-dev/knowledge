@@ -7,12 +7,17 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
-# git is needed by the vault-clone + commit step the worker runs
-# against the knowledge-vault repo. Ship it now so the runtime
-# image doesn't change shape between commits and Keel's image-digest
-# comparison stays meaningful.
+# git + openssh-client are needed by the vault-clone + commit step
+# the worker runs against the knowledge-vault repo. Without ssh on
+# PATH, `git clone git@github.com:…` fails with `ssh: not found` —
+# python:3.12-slim ships only the git CLI; ssh is a separate package.
+# Ship both now so the runtime image doesn't change shape between
+# commits and Keel's image-digest comparison stays meaningful.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        git \
+        openssh-client \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv as the package manager. uv handles both the lockfile-
