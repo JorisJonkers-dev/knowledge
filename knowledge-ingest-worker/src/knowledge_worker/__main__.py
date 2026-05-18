@@ -1,10 +1,10 @@
 """Entry point: ``python -m knowledge_worker`` (or via
 ``opentelemetry-instrument``).
 
-Phase 5-1 ships only the consumer skeleton + the `LoggingHandler` —
-each delivery emits one structured log and is ACKed. The real
-ingest flow (LightRAG, Ollama embeddings, knowledge-vault git
-commits) lands in stacked follow-ups.
+Today the worker only ships the consumer skeleton + the
+`LoggingHandler` — each delivery emits one structured log and is
+ACKed. The real ingest flow (LightRAG, Ollama embeddings,
+knowledge-vault git commits) lands in stacked follow-ups.
 """
 
 from __future__ import annotations

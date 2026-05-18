@@ -1,8 +1,8 @@
 # knowledge-ingest-worker
 
-Python consumer that reads `knowledge.ingest`-bound messages from RabbitMQ and (in later phases) commits canonical notes to the `knowledge-vault` git repo + populates LightRAG chunks/entities/relations in `knowledge_db`.
+Python consumer that reads `knowledge.ingest`-bound messages from RabbitMQ and (in stacked follow-ups) commits canonical notes to the `knowledge-vault` git repo + populates LightRAG chunks/entities/relations in `knowledge_db`.
 
-Phase 5-1 ships the worker skeleton: it connects, consumes, logs each delivery as a structured JSON line, and ACKs. Phase 5-2 layers the git-vault writer on top, Phase 5-3 the LightRAG ingest pipeline.
+Today the worker ships the skeleton: connect, consume, log each delivery as a structured JSON line, ACK. The git-vault writer lands next; the LightRAG ingest pipeline (Ollama embeddings + pgvector + entity/relation extraction) layers on top of that.
 
 ## Local development
 

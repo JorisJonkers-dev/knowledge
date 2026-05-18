@@ -32,8 +32,8 @@ class Settings:
             rabbitmq_user=e.get("RABBITMQ_USER", "guest"),
             rabbitmq_password=e.get("RABBITMQ_PASSWORD", "guest"),
             rabbitmq_vhost=e.get("RABBITMQ_VHOST", "/"),
-            # Bound to `knowledge.*` by IngestQueueConfig on the
-            # knowledge-api side — see Phase 4c-1.
+            # Bound to `knowledge.*` by `IngestQueueConfig` on the
+            # knowledge-api side.
             queue=e.get("INGEST_QUEUE", "knowledge.ingest"),
             # Low prefetch — each message kicks off chunking + embedding +
             # a git commit; concurrency is bounded by Ollama + LightRAG

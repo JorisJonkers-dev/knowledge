@@ -1,11 +1,10 @@
 """Blocking pika consumer.
 
-Acks on a clean `handler.handle` return. Reraises everything else so
-pika's default behaviour (`requeue=True`) nacks the delivery and
-returns it to the broker. Once Phase 5-3 lands the DLX is wired in
-the knowledge-api side already, so terminal failures land on
-`knowledge.ingest.dlq` after the broker's default delivery-count
-trips.
+Acks on a clean `handler.handle` return. Reraises everything else
+so pika's default behaviour (`requeue=True`) nacks the delivery and
+returns it to the broker. The knowledge-api side already declares
+the DLX, so terminal failures eventually land on
+`knowledge.ingest.dlq` after the broker's redelivery count trips.
 """
 
 from __future__ import annotations
@@ -109,8 +108,10 @@ class Consumer:
         except (ValidationError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             # Bad payloads can't get fixed by retrying — ack so the
             # broker doesn't redeliver the same broken message
-            # forever. The DLQ workflow in Phase 5-3 routes these to
-            # a dead-letter queue instead, once it lands.
+            # forever. A future change can route these to the
+            # dead-letter queue instead by switching to nack +
+            # requeue=false; today the broker's redelivery limit
+            # handles that path well enough.
             self._log.error(
                 "consumer.parse_failed",
                 routing_key=delivery.routing_key,

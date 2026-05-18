@@ -1,15 +1,15 @@
 """Message handlers.
 
-Phase 5-1 ships a `LoggingHandler` that just records each captured
-note + ACKs. Phase 5-2 swaps in a `VaultGitHandler` that writes the
-markdown file under the cloned `knowledge-vault` repo, then commits +
-pushes. Phase 5-3 wraps that with the LightRAG chunking + embedding
-pipeline.
+Today the worker ships a `LoggingHandler` that just records each
+captured note + ACKs. A `VaultGitHandler` lands next — clones
+`knowledge-vault`, writes one markdown file per delivery,
+commits + pushes. The LightRAG chunking + embedding pipeline
+wraps that handler when it lands.
 
-The `Handler` protocol keeps `Consumer` ignorant of which stage we're
-in — a test can construct the consumer with a `RecordingHandler` and
-assert on the captured notes without spinning up the production
-backends.
+The `Handler` protocol keeps `Consumer` ignorant of which stage
+we're in — a test can construct the consumer with a
+`RecordingHandler` and assert on captured notes without spinning
+up the production backends.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ class Handler(Protocol):
 
 
 class LoggingHandler:
-    """Default Phase 5-1 handler: emits one structured log per delivery."""
+    """Default handler: emits one structured log line per delivery."""
 
     def __init__(self) -> None:
         self._log = structlog.get_logger(__name__)
