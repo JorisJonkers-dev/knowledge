@@ -55,6 +55,7 @@ class McpToolsTest {
             "knowledge.get_note",
             "knowledge.list_recent",
             "knowledge.find_conflicts",
+            "knowledge.relations",
         )
     }
 
@@ -156,6 +157,42 @@ class McpToolsTest {
         assertThat(rels).hasSize(1)
         assertThat(rels[0]["predicate"]).isEqualTo("supersedes")
         assertThat(rels[0]["object_id"]).isEqualTo("01ABC")
+    }
+
+    @Test
+    fun `relations forwards depth to the service and projects each edge`() {
+        every { recallService.walkRelations("01HXY", 2) } returns
+            listOf(
+                KbRelation(
+                    subjectId = "01HXY",
+                    predicate = "see_also",
+                    objectId = "01DEF",
+                    props = emptyMap(),
+                    createdAt = Instant.parse("2026-05-13T12:00:00Z"),
+                ),
+                KbRelation(
+                    subjectId = "01DEF",
+                    predicate = "supersedes",
+                    objectId = "01OLD",
+                    props = emptyMap(),
+                    createdAt = Instant.parse("2026-05-13T12:01:00Z"),
+                ),
+            )
+        val out =
+            tools.call("knowledge.relations", mapper.readTree("""{"id":"01HXY","depth":2}"""))!!
+
+        @Suppress("UNCHECKED_CAST")
+        val rels = out["relations"] as List<Map<String, Any?>>
+        assertThat(rels).hasSize(2)
+        assertThat(rels.map { it["object_id"] }).containsExactly("01DEF", "01OLD")
+        verify(exactly = 1) { recallService.walkRelations("01HXY", 2) }
+    }
+
+    @Test
+    fun `relations defaults depth to one when omitted`() {
+        every { recallService.walkRelations("01HXY", 1) } returns emptyList()
+        tools.call("knowledge.relations", mapper.readTree("""{"id":"01HXY"}"""))
+        verify(exactly = 1) { recallService.walkRelations("01HXY", 1) }
     }
 
     @Test

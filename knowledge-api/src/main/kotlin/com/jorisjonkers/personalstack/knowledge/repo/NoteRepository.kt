@@ -130,6 +130,67 @@ class NoteRepository(
             }
 
     /**
+     * Walks the relation graph rooted at [id] up to [depth] hops in
+     * either direction. Both `subject_id = id OR object_id = id` are
+     * traversed so an undirected agent-side view (`see_also`,
+     * `contradicts`) renders naturally; `supersedes` and
+     * `derived_from` show up alongside, signed by their predicate.
+     *
+     * Depth 1 returns just the direct neighbours; depth 2 includes
+     * their neighbours; etc. The walk dedups visited ids per pass —
+     * cycles do not blow up. Capped at [maxDepth] hops + [maxRows]
+     * total returned rows so a pathological supersedes-chain cannot
+     * exhaust the agent's context.
+     */
+    fun walkRelations(
+        id: String,
+        depth: Int,
+    ): List<KbRelation> {
+        if (depth < 1) return emptyList()
+        val effectiveDepth = minOf(depth, MAX_DEPTH)
+        val visited = mutableSetOf(id)
+        var frontier: Set<String> = setOf(id)
+        val collected = mutableListOf<KbRelation>()
+        repeat(effectiveDepth) {
+            if (frontier.isEmpty()) return@repeat
+            val edges = fetchEdgesTouching(frontier)
+            frontier = absorbEdges(edges, collected, visited)
+            if (collected.size >= MAX_ROWS) return collected
+        }
+        return collected
+    }
+
+    private fun fetchEdgesTouching(ids: Set<String>): List<KbRelation> =
+        dsl
+            .selectFrom(KB_RELATIONS)
+            .where(KB_RELATIONS.SUBJECT_ID.`in`(ids).or(KB_RELATIONS.OBJECT_ID.`in`(ids)))
+            .fetch()
+            .map { record ->
+                KbRelation(
+                    subjectId = record.subjectId ?: "",
+                    predicate = record.predicate ?: "",
+                    objectId = record.objectId ?: "",
+                    props = parseProps(record.props),
+                    createdAt = record.createdAt?.toInstant(ZoneOffset.UTC) ?: Instant.EPOCH,
+                )
+            }
+
+    private fun absorbEdges(
+        edges: List<KbRelation>,
+        collected: MutableList<KbRelation>,
+        visited: MutableSet<String>,
+    ): Set<String> {
+        val nextFrontier = mutableSetOf<String>()
+        for (edge in edges) {
+            if (collected.size >= MAX_ROWS) break
+            collected += edge
+            if (visited.add(edge.subjectId)) nextFrontier += edge.subjectId
+            if (visited.add(edge.objectId)) nextFrontier += edge.objectId
+        }
+        return nextFrontier
+    }
+
+    /**
      * Insert helper for tests + the soon-to-arrive `link` tool. Keeps
      * `kb_relations.props` as a JSON-encoded TEXT column (the V1 schema
      * deliberately avoided JSONB to stay inside jOOQ's DDLDatabase
@@ -190,5 +251,12 @@ class NoteRepository(
 
     companion object {
         private val CONFLICT_PREDICATES = listOf("supersedes", "contradicts")
+
+        // Bounds for `walkRelations`. The depth cap stops a runaway
+        // graph walk; the row cap keeps the agent-facing response
+        // from blowing the context budget on a hub note with
+        // thousands of incoming edges.
+        private const val MAX_DEPTH = 4
+        private const val MAX_ROWS = 200
     }
 }

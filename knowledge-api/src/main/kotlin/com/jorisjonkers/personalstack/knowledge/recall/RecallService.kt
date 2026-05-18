@@ -35,4 +35,9 @@ class RecallService(
     ): List<KbNote> = noteRepository.listRecent(scope, type, limit)
 
     fun findConflicts(id: String): List<KbRelation> = noteRepository.findConflicts(id)
+
+    fun walkRelations(
+        id: String,
+        depth: Int,
+    ): List<KbRelation> = noteRepository.walkRelations(id, depth)
 }

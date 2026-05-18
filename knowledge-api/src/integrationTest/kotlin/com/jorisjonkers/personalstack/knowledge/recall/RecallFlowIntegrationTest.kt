@@ -212,7 +212,45 @@ class RecallFlowIntegrationTest : IntegrationTestBase() {
             "knowledge.get_note",
             "knowledge.list_recent",
             "knowledge.find_conflicts",
+            "knowledge.relations",
         )
+    }
+
+    @Test
+    fun `relations walks the kb_relations graph up to the requested depth`() {
+        val a = seed("root", "a")
+        val b = seed("hop1", "b")
+        val c = seed("hop2", "c")
+        noteRepository.insertRelation(
+            KbRelation(
+                subjectId = a.id,
+                predicate = "see_also",
+                objectId = b.id,
+                props = emptyMap(),
+                createdAt = Instant.now(),
+            ),
+        )
+        noteRepository.insertRelation(
+            KbRelation(
+                subjectId = b.id,
+                predicate = "supersedes",
+                objectId = c.id,
+                props = emptyMap(),
+                createdAt = Instant.now(),
+            ),
+        )
+
+        // depth=1 reaches the direct neighbour only.
+        val depth1 =
+            objectMapper.readTree(call("knowledge.relations", mapOf("id" to a.id, "depth" to 1)))
+        val one = depth1["result"]["relations"].map { it["object_id"].asText() }.toSet()
+        assertThat(one).containsExactly(b.id)
+
+        // depth=2 sees the b → c hop too.
+        val depth2 =
+            objectMapper.readTree(call("knowledge.relations", mapOf("id" to a.id, "depth" to 2)))
+        val two = depth2["result"]["relations"].map { it["object_id"].asText() }.toSet()
+        assertThat(two).containsExactlyInAnyOrder(b.id, c.id)
     }
 
     private fun call(

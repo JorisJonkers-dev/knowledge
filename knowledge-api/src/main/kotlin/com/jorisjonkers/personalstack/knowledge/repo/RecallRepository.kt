@@ -31,7 +31,30 @@ class RecallRepository(
         limit: Int,
     ): List<RecallHit> {
         if (query.isBlank()) return emptyList()
-        val scopeClause = if (scope != null) "AND scope = ?" else ""
+
+        // Scope semantics:
+        //   explicit value         → exact-match filter on `kb_notes.scope`.
+        //   `all`                  → no scope filter — search every scope.
+        //   omitted (null)         → "curated default": exclude rows still
+        //                            sitting under `_inbox` and exclude
+        //                            assistant-private agent scopes; let
+        //                            topic / project / `agent:_shared` /
+        //                            personal / work surface. Untriaged
+        //                            captures should not pollute default
+        //                            recall — they get rewritten by the
+        //                            curator anyway.
+        val (scopeClause, scopeBinds) =
+            when {
+                scope == null ->
+                    Pair(
+                        "AND scope != '_inbox' " +
+                            "AND (scope NOT LIKE 'agent:%' OR scope = 'agent:_shared')",
+                        emptyList<Any>(),
+                    )
+                scope.equals(SCOPE_ALL, ignoreCase = true) -> Pair("", emptyList<Any>())
+                else -> Pair("AND scope = ?", listOf<Any>(scope))
+            }
+
         val sql =
             """
             SELECT id, type, scope, title, body,
@@ -47,14 +70,8 @@ class RecallRepository(
             LIMIT ?
             """.trimIndent()
 
-        val binds: Array<Any> =
-            if (scope != null) {
-                arrayOf(query, query, scope, limit)
-            } else {
-                arrayOf(query, query, limit)
-            }
-
-        return dsl.resultQuery(sql, *binds).fetch().map { record -> record.toRecallHit() }
+        val binds: List<Any> = listOf(query, query) + scopeBinds + listOf(limit)
+        return dsl.resultQuery(sql, *binds.toTypedArray()).fetch().map { record -> record.toRecallHit() }
     }
 
     private fun Record.toRecallHit(): RecallHit {
@@ -71,5 +88,10 @@ class RecallRepository(
 
     companion object {
         private const val SNIPPET_CHARS = 280
+
+        // Sentinel scope value: callers pass this to opt into a
+        // cross-scope query. Anything else is treated as a literal
+        // scope filter.
+        const val SCOPE_ALL = "all"
     }
 }
