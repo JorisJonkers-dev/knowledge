@@ -22,6 +22,13 @@ class Settings:
     prefetch_count: int
     log_level: str
     service_version: str
+    vault_enabled: bool
+    vault_clone_url: str
+    vault_clone_dir: str
+    vault_branch: str
+    vault_ssh_key_path: str
+    vault_author_name: str
+    vault_author_email: str
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Settings:
@@ -45,4 +52,19 @@ class Settings:
             # Stamped onto every log line / span so Loki can group by
             # service.version the same way the JVM services do.
             service_version=e.get("SERVICE_VERSION", "unknown"),
+            # Vault writer. When `VAULT_ENABLED=false` (the default
+            # for local runs) the worker falls back to `LoggingHandler`
+            # and never touches git — useful for smoke tests without a
+            # deploy key. Production sets `VAULT_ENABLED=true` and the
+            # deploy key lands at `VAULT_SSH_KEY_PATH` via Vault Agent
+            # injection of `secret/data/knowledge-system/vault-deploy-key`.
+            vault_enabled=e.get("VAULT_ENABLED", "false").lower() in ("1", "true", "yes"),
+            vault_clone_url=e.get(
+                "VAULT_CLONE_URL", "git@github.com:ExtraToast/knowledge-vault.git"
+            ),
+            vault_clone_dir=e.get("VAULT_CLONE_DIR", "/var/lib/knowledge-vault"),
+            vault_branch=e.get("VAULT_BRANCH", "main"),
+            vault_ssh_key_path=e.get("VAULT_SSH_KEY_PATH", "/etc/git-secrets/id_ed25519"),
+            vault_author_name=e.get("VAULT_AUTHOR_NAME", "knowledge-ingest-worker"),
+            vault_author_email=e.get("VAULT_AUTHOR_EMAIL", "worker@knowledge.local"),
         )

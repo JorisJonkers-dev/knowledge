@@ -1,15 +1,14 @@
 """Message handlers.
 
-Today the worker ships a `LoggingHandler` that just records each
-captured note + ACKs. A `VaultGitHandler` lands next — clones
-`knowledge-vault`, writes one markdown file per delivery,
-commits + pushes. The LightRAG chunking + embedding pipeline
-wraps that handler when it lands.
+The `Handler` protocol keeps `Consumer` ignorant of which storage
+backend is wired in. Production runs `VaultHandler` — clone the
+knowledge-vault repo, write one markdown file per delivery, commit
++ push. The LightRAG chunking + embedding pipeline will wrap that
+handler when it lands.
 
-The `Handler` protocol keeps `Consumer` ignorant of which stage
-we're in — a test can construct the consumer with a
-`RecordingHandler` and assert on captured notes without spinning
-up the production backends.
+`LoggingHandler` stays as a no-side-effects default for smoke runs
+where no real vault is reachable; `RecordingHandler` keeps
+deliveries in memory for tests.
 """
 
 from __future__ import annotations
@@ -19,6 +18,7 @@ from typing import Protocol
 import structlog
 
 from knowledge_worker.messages import CapturedNote
+from knowledge_worker.vault import VaultWriter
 
 
 class Handler(Protocol):
@@ -26,7 +26,7 @@ class Handler(Protocol):
 
 
 class LoggingHandler:
-    """Default handler: emits one structured log line per delivery."""
+    """No-side-effects handler — one structured log line per delivery."""
 
     def __init__(self) -> None:
         self._log = structlog.get_logger(__name__)
@@ -40,6 +40,30 @@ class LoggingHandler:
             scope=note.scope,
             source=note.source,
             tag_count=len(note.tags),
+        )
+
+
+class VaultHandler:
+    """Persists each captured note to the knowledge-vault git repo.
+
+    Holds a single open `VaultWriter` for the worker's lifetime and
+    delegates per-delivery work to it. The writer raises on push
+    failures; we re-raise so `Consumer` nacks the delivery and the
+    broker handles redelivery.
+    """
+
+    def __init__(self, writer: VaultWriter) -> None:
+        self._writer = writer
+        self._log = structlog.get_logger(__name__)
+
+    def handle(self, routing_key: str, note: CapturedNote) -> None:
+        result = self._writer.write(note)
+        self._log.info(
+            "knowledge.persisted",
+            routing_key=routing_key,
+            id=note.id,
+            rel=result.relative_path,
+            commit=result.commit_sha[:12],
         )
 
 

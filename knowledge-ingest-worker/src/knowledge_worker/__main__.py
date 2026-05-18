@@ -11,14 +11,34 @@ from __future__ import annotations
 
 import signal
 import sys
+from pathlib import Path
 from types import FrameType
 
 import structlog
+from git import Actor
 
 from knowledge_worker.consumer import Consumer, silence_pika_warning_logs
-from knowledge_worker.handlers import LoggingHandler
+from knowledge_worker.handlers import Handler, LoggingHandler, VaultHandler
 from knowledge_worker.settings import Settings
 from knowledge_worker.telemetry import configure as configure_telemetry
+from knowledge_worker.vault import VaultGitWriter
+
+
+def _build_handler(settings: Settings, log: structlog.BoundLogger) -> Handler:
+    if not settings.vault_enabled:
+        log.info("handler.vault.disabled")
+        return LoggingHandler()
+    writer = VaultGitWriter(
+        clone_url=settings.vault_clone_url,
+        clone_dir=Path(settings.vault_clone_dir),
+        branch=settings.vault_branch,
+        author=Actor(settings.vault_author_name, settings.vault_author_email),
+        ssh_key_path=settings.vault_ssh_key_path,
+        push=True,
+    )
+    writer.open()
+    log.info("handler.vault.ready", clone=settings.vault_clone_dir)
+    return VaultHandler(writer)
 
 
 def main() -> int:
@@ -27,7 +47,7 @@ def main() -> int:
     silence_pika_warning_logs()
     log = structlog.get_logger(__name__)
 
-    consumer = Consumer(settings, LoggingHandler())
+    consumer = Consumer(settings, _build_handler(settings, log))
 
     def shutdown(signum: int, _frame: FrameType | None) -> None:
         log.info("consumer.shutdown.signal", signal=signum)

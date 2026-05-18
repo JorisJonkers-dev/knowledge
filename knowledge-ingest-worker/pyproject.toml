@@ -25,6 +25,7 @@ dependencies = [
   # in now so the connection-pool wiring lands together with the
   # consumer skeleton; the SQL queries come in once the LightRAG ingest pipeline lands.
   "psycopg[binary,pool]>=3.2.0,<4",
+  "gitpython>=3.1.50",
 ]
 
 [dependency-groups]
