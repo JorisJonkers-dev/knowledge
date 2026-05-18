@@ -82,12 +82,17 @@ class VaultGitWriter:
             self._log.info("vault.attached", clone=str(self._clone_dir))
         else:
             self._clone_dir.parent.mkdir(parents=True, exist_ok=True)
+            # NOT a shallow clone: GitPython resolves parent objects via
+            # `git cat-file --batch` when committing on top of HEAD, and
+            # a `depth=1` store crashes that with a misleading
+            # `BrokenPipeError` because cat-file exits early when an
+            # ancestor object is missing. The knowledge-vault is small
+            # markdown anyway; a full clone is cheap.
             self._repo = Repo.clone_from(
                 self._clone_url,
                 self._clone_dir,
                 branch=self._branch,
                 env=self._git_env(),
-                depth=1,
             )
             self._log.info("vault.cloned", clone=str(self._clone_dir))
 
