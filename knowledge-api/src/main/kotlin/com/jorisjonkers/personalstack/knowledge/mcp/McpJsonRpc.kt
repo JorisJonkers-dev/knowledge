@@ -36,4 +36,11 @@ object JsonRpcErrorCodes {
     const val METHOD_NOT_FOUND = -32601
     const val INVALID_PARAMS = -32602
     const val INTERNAL_ERROR = -32603
+
+    // Application-level codes use the `-32000..-32099` reserved range
+    // per the JSON-RPC 2.0 spec. The bearer filter already returns
+    // -32001 for missing / invalid tokens; admin tools reuse the same
+    // code for "valid token, not on the admin allow-list" so the
+    // client can treat both as a permissions failure.
+    const val UNAUTHORIZED = -32001
 }

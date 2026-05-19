@@ -3,6 +3,7 @@
 
 package com.jorisjonkers.personalstack.knowledge.mcp
 
+import com.jorisjonkers.personalstack.knowledge.auth.McpAuthorizationError
 import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -62,15 +63,6 @@ class McpController(
         return JsonRpcResponse(id = request.id, result = projectPromptResult(resolved))
     }
 
-    private fun invalidParamsResponse(
-        id: JsonNode?,
-        message: String,
-    ): JsonRpcResponse =
-        JsonRpcResponse(
-            id = id,
-            error = JsonRpcError(code = JsonRpcErrorCodes.INVALID_PARAMS, message = message),
-        )
-
     private fun projectPromptResult(resolved: PromptResult): Map<String, Any?> =
         mapOf(
             "description" to resolved.description,
@@ -83,28 +75,52 @@ class McpController(
                 },
         )
 
+    // ReturnCount(4): each return signals a distinct failure mode of
+    // the JSON-RPC dispatch (blank name, unauthorized, unknown tool,
+    // success). Collapsing them via a sealed-result type adds more
+    // code than it removes and obscures the per-failure error code,
+    // so suppress the rule here rather than refactor for refactor's
+    // sake.
+    @Suppress("ReturnCount")
     private fun handleToolsCall(request: JsonRpcRequest): JsonRpcResponse {
         val name =
             request.params
                 ?.get("name")
                 ?.asText()
                 .orEmpty()
-        if (name.isBlank()) {
-            return JsonRpcResponse(
-                id = request.id,
-                error =
-                    JsonRpcError(
-                        code = JsonRpcErrorCodes.INVALID_PARAMS,
-                        message = "tools/call: missing required string 'name'",
-                    ),
-            )
-        }
+        if (name.isBlank()) return invalidParamsResponse(request.id, "tools/call: missing required string 'name'")
         val arguments = request.params?.get("arguments")
         val result =
-            tools.call(name, arguments)
+            try {
+                tools.call(name, arguments)
+            } catch (exc: McpAuthorizationError) {
+                return unauthorizedResponse(request.id, exc.message)
+            }
                 ?: return methodNotFoundResponse(request.id, "tools/call:$name")
         return JsonRpcResponse(id = request.id, result = wrapToolResult(result))
     }
+
+    private fun invalidParamsResponse(
+        id: JsonNode?,
+        message: String,
+    ): JsonRpcResponse =
+        JsonRpcResponse(
+            id = id,
+            error = JsonRpcError(code = JsonRpcErrorCodes.INVALID_PARAMS, message = message),
+        )
+
+    private fun unauthorizedResponse(
+        id: JsonNode?,
+        message: String?,
+    ): JsonRpcResponse =
+        JsonRpcResponse(
+            id = id,
+            error =
+                JsonRpcError(
+                    code = JsonRpcErrorCodes.UNAUTHORIZED,
+                    message = message ?: "admin tool requires an authorized bearer",
+                ),
+        )
 
     /**
      * Wrap a tool's domain-shaped result map in the MCP `CallToolResult`

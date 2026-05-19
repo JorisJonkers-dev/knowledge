@@ -16,4 +16,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 @ConfigurationProperties("knowledge.mcp")
 data class McpBearerProperties(
     val tokens: Map<String, String> = emptyMap(),
+    /**
+     * Token names from [tokens] that are also allowed to call the
+     * admin-gated MCP tools (`add_topic`, `update_topic`,
+     * `merge_topics`, `rename_tag`). Listed by name, not by secret
+     * value, so the same Vault projection drives both: the secret
+     * stays in `tokens`, the privilege escalation is just a string
+     * comparison. Default empty — admin tools are inert until an
+     * operator opts a token in.
+     */
+    val adminTokens: List<String> = emptyList(),
 )

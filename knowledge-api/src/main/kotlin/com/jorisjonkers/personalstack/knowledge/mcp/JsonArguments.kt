@@ -60,6 +60,16 @@ internal object JsonArguments {
             ?.takeIf { it.isIntegralNumber }
             ?.asInt()
 
+    fun optionalBoolean(
+        node: JsonNode,
+        field: String,
+    ): Boolean? =
+        node
+            .get(field)
+            ?.takeUnless { it.isNull }
+            ?.takeIf { it.isBoolean }
+            ?.asBoolean()
+
     fun optionalStringArray(
         node: JsonNode,
         field: String,

@@ -1,6 +1,8 @@
 package com.jorisjonkers.personalstack.knowledge.repo
 
 import com.jorisjonkers.personalstack.knowledge.domain.Topic
+import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbNoteTags.KB_NOTE_TAGS
+import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbNotes.KB_NOTES
 import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbTopicAliases.KB_TOPIC_ALIASES
 import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbTopics.KB_TOPICS
 import org.jooq.DSLContext
@@ -138,5 +140,59 @@ class TopicRepository(
                     .set(KB_TOPIC_ALIASES.SLUG, slug)
                     .execute()
             }
+    }
+
+    /**
+     * Bulk-rename every note scoped `topic:<from>` to `topic:<into>`
+     * and soft-deactivate the `from` slug. Returns the number of
+     * note rows touched so the caller can report it.
+     *
+     * Vault-path rewrites stay out of scope here — the curator owns
+     * `vault_path` and re-promotes its slice of the inbox per pass.
+     * For permanent paths on already-promoted notes, surface the
+     * affected ids and let the operator run a vault sweep separately.
+     */
+    fun mergeInto(
+        fromSlug: String,
+        intoSlug: String,
+        now: Instant = Instant.now(),
+    ): Int {
+        val ts = now.atOffset(ZoneOffset.UTC).toLocalDateTime()
+        val fromScope = "$TOPIC_SCOPE_PREFIX$fromSlug"
+        val intoScope = "$TOPIC_SCOPE_PREFIX$intoSlug"
+        val touched =
+            dsl
+                .update(KB_NOTES)
+                .set(KB_NOTES.SCOPE, intoScope)
+                .set(KB_NOTES.UPDATED_AT, ts)
+                .where(KB_NOTES.SCOPE.eq(fromScope))
+                .execute()
+        dsl
+            .update(KB_TOPICS)
+            .set(KB_TOPICS.IS_ACTIVE, false)
+            .set(KB_TOPICS.UPDATED_AT, ts)
+            .where(KB_TOPICS.SLUG.eq(fromSlug))
+            .execute()
+        return touched
+    }
+
+    /**
+     * Bulk-rename a tag everywhere it appears in `kb_note_tags`. The
+     * PK is `(note_id, tag)`, so a straight UPDATE is fine — there's
+     * no per-row uniqueness to fight with a temporary collision.
+     * Returns the number of rows touched.
+     */
+    fun renameTag(
+        fromTag: String,
+        toTag: String,
+    ): Int =
+        dsl
+            .update(KB_NOTE_TAGS)
+            .set(KB_NOTE_TAGS.TAG, toTag)
+            .where(KB_NOTE_TAGS.TAG.eq(fromTag))
+            .execute()
+
+    private companion object {
+        const val TOPIC_SCOPE_PREFIX = "topic:"
     }
 }
