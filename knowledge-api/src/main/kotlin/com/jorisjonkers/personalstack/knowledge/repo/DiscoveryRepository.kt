@@ -7,6 +7,7 @@ import com.jorisjonkers.personalstack.knowledge.domain.TopicStats
 import com.jorisjonkers.personalstack.knowledge.domain.TopicSummary
 import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbNoteTags.KB_NOTE_TAGS
 import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbNotes.KB_NOTES
+import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbTopics.KB_TOPICS
 import org.jooq.DSLContext
 import org.jooq.impl.DSL.count
 import org.jooq.impl.DSL.max
@@ -35,18 +36,29 @@ class DiscoveryRepository(
     private val dsl: DSLContext,
 ) {
     /**
-     * Topics in use — derived from `kb_notes.scope LIKE 'topic:%'`.
-     * Returned with the `topic:` prefix stripped so callers see bare
-     * slugs. When the [Dynamic-vocabulary] migration lands, joins
-     * onto `kb_topics` add the description; until then the field is
-     * null.
+     * Topics in use — derived from `kb_notes.scope LIKE 'topic:%'`,
+     * enriched with the description from `kb_topics` when the slug
+     * is defined there. Returned with the `topic:` prefix stripped so
+     * callers see bare slugs. A slug captured against without first
+     * being defined in `kb_topics` still surfaces here; the
+     * `description` field is null until an admin adds the row via
+     * `add_topic`.
      */
-    fun listTopics(limit: Int): List<TopicSummary> =
-        dsl
-            .select(KB_NOTES.SCOPE, count(), max(KB_NOTES.CAPTURED_AT))
+    fun listTopics(limit: Int): List<TopicSummary> {
+        val scopeExpr =
+            org.jooq.impl.DSL
+                .concat(
+                    org.jooq.impl.DSL
+                        .value(TOPIC_PREFIX),
+                    KB_TOPICS.SLUG,
+                )
+        return dsl
+            .select(KB_NOTES.SCOPE, count(), max(KB_NOTES.CAPTURED_AT), KB_TOPICS.DESCRIPTION)
             .from(KB_NOTES)
+            .leftJoin(KB_TOPICS)
+            .on(scopeExpr.eq(KB_NOTES.SCOPE))
             .where(KB_NOTES.SCOPE.like("$TOPIC_PREFIX%"))
-            .groupBy(KB_NOTES.SCOPE)
+            .groupBy(KB_NOTES.SCOPE, KB_TOPICS.DESCRIPTION)
             .orderBy(count().desc(), KB_NOTES.SCOPE.asc())
             .limit(limit)
             .fetch()
@@ -56,8 +68,10 @@ class DiscoveryRepository(
                     slug = scope.removePrefix(TOPIC_PREFIX),
                     noteCount = record.value2() ?: 0,
                     lastCapturedAt = record.value3()?.toInstant(ZoneOffset.UTC),
+                    description = record.value4()?.takeIf { it.isNotBlank() },
                 )
             }
+    }
 
     /**
      * Tag frequency — tags live in the join table, so the count is a
