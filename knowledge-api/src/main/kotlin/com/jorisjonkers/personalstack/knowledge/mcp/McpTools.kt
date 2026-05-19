@@ -13,9 +13,10 @@ import tools.jackson.databind.json.JsonMapper
 class McpTools(
     captureTools: CaptureMcpTools,
     readTools: ReadMcpTools,
+    discoveryTools: DiscoveryMcpTools,
 ) {
     private val tools: Map<String, McpTool> =
-        (captureTools.tools() + readTools.tools()).associateBy { it.name }
+        (captureTools.tools() + readTools.tools() + discoveryTools.tools()).associateBy { it.name }
 
     fun describe(): List<Map<String, Any?>> = tools.values.map { it.descriptor }
 
