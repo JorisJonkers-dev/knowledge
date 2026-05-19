@@ -96,7 +96,7 @@ class McpControllerIntegrationTest : IntegrationTestBase() {
     }
 
     @Test
-    fun `mcp initialize advertises tools capability and the protocol version`() {
+    fun `mcp initialize advertises tools and prompts capabilities plus the protocol version`() {
         val result =
             mockMvc
                 .post("/mcp") {
@@ -110,6 +110,7 @@ class McpControllerIntegrationTest : IntegrationTestBase() {
         assertThat(result0["protocolVersion"].asText()).isEqualTo("2025-06-18")
         assertThat(result0["serverInfo"]["name"].asText()).isEqualTo("knowledge-api")
         assertThat(result0["capabilities"]["tools"]["listChanged"].asBoolean()).isFalse
+        assertThat(result0["capabilities"]["prompts"]["listChanged"].asBoolean()).isFalse
     }
 
     @Test
@@ -131,6 +132,68 @@ class McpControllerIntegrationTest : IntegrationTestBase() {
         assertThat(tools.isArray).isTrue
         assertThat(tools.size()).isGreaterThan(0)
         tools.forEach { assertThat(it["name"].asText()).isNotBlank }
+    }
+
+    @Test
+    fun `mcp prompts list returns the registered prompts with their argument metadata`() {
+        val result =
+            mockMvc
+                .post("/mcp") {
+                    contentType = MediaType.APPLICATION_JSON
+                    header("Authorization", "Bearer test-token-ws")
+                    content = """{"jsonrpc":"2.0","id":10,"method":"prompts/list"}"""
+                }.andReturn()
+
+        assertThat(result.response.status).isEqualTo(200)
+        val prompts = objectMapper.readTree(result.response.contentAsString)["result"]["prompts"]
+        assertThat(prompts.isArray).isTrue
+        val names = prompts.map { it["name"].asText() }
+        assertThat(names).contains("recall_for_task", "capture_lesson_about", "topics_audit")
+    }
+
+    @Test
+    fun `mcp prompts get renders the recall_for_task message with the supplied task verbatim`() {
+        val result =
+            mockMvc
+                .post("/mcp") {
+                    contentType = MediaType.APPLICATION_JSON
+                    header("Authorization", "Bearer test-token-ws")
+                    content =
+                        """
+                        {"jsonrpc":"2.0","id":11,"method":"prompts/get","params":
+                          {"name":"recall_for_task","arguments":{"task":"add a Vue component"}}}
+                        """.trimIndent()
+                }.andReturn()
+
+        assertThat(result.response.status).isEqualTo(200)
+        val out = objectMapper.readTree(result.response.contentAsString)["result"]
+        assertThat(out["messages"].size()).isEqualTo(1)
+        val msg = out["messages"][0]
+        assertThat(msg["role"].asText()).isEqualTo("user")
+        assertThat(msg["content"]["type"].asText()).isEqualTo("text")
+        val text = msg["content"]["text"].asText()
+        assertThat(text).contains("add a Vue component")
+        assertThat(text).contains("knowledge.recall")
+        assertThat(text).contains("knowledge.list_topics")
+    }
+
+    @Test
+    fun `mcp prompts get on an unknown name returns method_not_found`() {
+        val result =
+            mockMvc
+                .post("/mcp") {
+                    contentType = MediaType.APPLICATION_JSON
+                    header("Authorization", "Bearer test-token-ws")
+                    content =
+                        """
+                        {"jsonrpc":"2.0","id":12,"method":"prompts/get",
+                         "params":{"name":"nonexistent"}}
+                        """.trimIndent()
+                }.andReturn()
+
+        assertThat(result.response.status).isEqualTo(200)
+        val error = objectMapper.readTree(result.response.contentAsString)["error"]
+        assertThat(error["code"].asInt()).isEqualTo(-32601)
     }
 
     @Test
