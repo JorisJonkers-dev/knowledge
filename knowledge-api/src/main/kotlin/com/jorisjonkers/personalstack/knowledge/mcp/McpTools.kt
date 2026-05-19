@@ -16,6 +16,7 @@ class McpTools(
     discoveryTools: DiscoveryMcpTools,
     adminTools: AdminMcpTools,
     digestTools: DigestMcpTools,
+    auditTools: AuditMcpTools,
 ) {
     private val tools: Map<String, McpTool> =
         (
@@ -23,7 +24,8 @@ class McpTools(
                 readTools.tools() +
                 discoveryTools.tools() +
                 adminTools.tools() +
-                digestTools.tools()
+                digestTools.tools() +
+                auditTools.tools()
         ).associateBy { it.name }
 
     fun describe(): List<Map<String, Any?>> = tools.values.map { it.descriptor }

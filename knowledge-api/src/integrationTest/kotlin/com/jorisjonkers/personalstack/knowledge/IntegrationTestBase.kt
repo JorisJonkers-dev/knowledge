@@ -21,7 +21,7 @@ abstract class IntegrationTestBase {
     @AfterEach
     fun resetSharedState() {
         dsl.execute(
-            "TRUNCATE TABLE kb_notes, kb_note_tags, kb_relations " +
+            "TRUNCATE TABLE kb_notes, kb_note_tags, kb_relations, kb_audit " +
                 "RESTART IDENTITY CASCADE",
         )
     }

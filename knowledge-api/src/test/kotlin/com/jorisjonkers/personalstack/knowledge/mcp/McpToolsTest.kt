@@ -2,12 +2,14 @@
 
 package com.jorisjonkers.personalstack.knowledge.mcp
 
+import com.jorisjonkers.personalstack.knowledge.audit.AuditService
 import com.jorisjonkers.personalstack.knowledge.auth.AdminAuthorization
 import com.jorisjonkers.personalstack.knowledge.capture.CaptureRequest
 import com.jorisjonkers.personalstack.knowledge.capture.CaptureService
 import com.jorisjonkers.personalstack.knowledge.digest.DigestService
 import com.jorisjonkers.personalstack.knowledge.discovery.DiscoveryService
 import com.jorisjonkers.personalstack.knowledge.domain.DigestCandidate
+import com.jorisjonkers.personalstack.knowledge.domain.KbAuditRow
 import com.jorisjonkers.personalstack.knowledge.domain.KbNote
 import com.jorisjonkers.personalstack.knowledge.domain.KbNoteType
 import com.jorisjonkers.personalstack.knowledge.domain.KbRelation
@@ -34,13 +36,14 @@ class McpToolsTest {
     private val recallService = mockk<RecallService>(relaxed = true)
     private val discoveryService = mockk<DiscoveryService>(relaxed = true)
     private val digestService = mockk<DigestService>(relaxed = true)
+    private val auditService = mockk<AuditService>(relaxed = true)
     private val topicRepository = mockk<TopicRepository>(relaxed = true)
     private val adminAuthorization = mockk<AdminAuthorization>(relaxed = true)
 
-    // Wire real Capture/Read/Discovery/Admin/DigestMcpTools around
-    // the mocked services — that's what Spring does in production
-    // and what gives us coverage of the descriptor builders + handler
-    // argument parsing.
+    // Wire real Capture/Read/Discovery/Admin/Digest/AuditMcpTools
+    // around the mocked services — that's what Spring does in
+    // production and what gives us coverage of the descriptor
+    // builders + handler argument parsing.
     private val tools =
         McpTools(
             CaptureMcpTools(captureService),
@@ -48,6 +51,7 @@ class McpToolsTest {
             DiscoveryMcpTools(discoveryService),
             AdminMcpTools(topicRepository, adminAuthorization),
             DigestMcpTools(digestService),
+            AuditMcpTools(auditService),
         )
     private val mapper: JsonMapper = JsonMapper.builder().addModule(KotlinModule.Builder().build()).build()
 
@@ -67,7 +71,7 @@ class McpToolsTest {
         )
 
     @Test
-    fun `describe advertises capture, read, discovery, admin, and digest tools by name`() {
+    fun `describe advertises capture, read, discovery, admin, digest, and audit tools by name`() {
         val names = tools.describe().map { it["name"] as String }
         assertThat(names).containsExactlyInAnyOrder(
             "knowledge.capture_lesson",
@@ -89,7 +93,39 @@ class McpToolsTest {
             "knowledge.merge_topics",
             "knowledge.rename_tag",
             "knowledge.digest_transcript",
+            "knowledge.list_audit",
         )
+    }
+
+    @Test
+    fun `list_audit projects each row including target metadata and timestamps`() {
+        every { auditService.list(any(), any(), any(), any(), any()) } returns
+            listOf(
+                KbAuditRow(
+                    id = "01HXAUD0000000000000000000",
+                    actor = "kb-renormalise-titles",
+                    action = "rename_title",
+                    targetId = "01HXNOTE000000000000000000",
+                    targetKind = "note",
+                    beforeJson = """{"title":"a very long title that nobody can scan"}""",
+                    afterJson = """{"title":"scannable claim"}""",
+                    at = Instant.parse("2026-05-19T13:00:00Z"),
+                ),
+            )
+
+        val out =
+            tools.call(
+                "knowledge.list_audit",
+                mapper.readTree("""{"actor":"kb-renormalise-titles","limit":10}"""),
+            )!!
+
+        @Suppress("UNCHECKED_CAST")
+        val rows = out["rows"] as List<Map<String, Any?>>
+        assertThat(rows).hasSize(1)
+        assertThat(rows[0]["action"]).isEqualTo("rename_title")
+        assertThat(rows[0]["target_kind"]).isEqualTo("note")
+        assertThat(rows[0]["after_json"]).isEqualTo("""{"title":"scannable claim"}""")
+        assertThat(rows[0]["at"]).isEqualTo("2026-05-19T13:00:00Z")
     }
 
     @Test
