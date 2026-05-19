@@ -79,10 +79,17 @@ remove_file() {
   log "removed ${path}"
 }
 
+readonly STATE_DIR="${CLAUDE_HOME}/state"
+readonly ALLOWLIST="${CLAUDE_HOME}/.knowledge-system-allowlist"
+
 managed_paths=(
   "${HOOKS_DIR}/user-prompt-submit-recall.sh"
+  "${HOOKS_DIR}/pre-tool-use-edit-recall.sh"
+  "${HOOKS_DIR}/pre-tool-use-git-commit-capture.sh"
+  "${HOOKS_DIR}/stop-session-digest.sh"
   "${SKILLS_DIR}/topics/SKILL.md"
   "${SKILLS_DIR}/audit/SKILL.md"
+  "${ALLOWLIST}"
 )
 
 if [ "${UNINSTALL}" = 1 ]; then
@@ -217,6 +224,372 @@ SKILL
 write_file "${SKILLS_DIR}/audit/SKILL.md" 0644 "${AUDIT_SKILL}"
 
 # -----------------------------------------------------------------
+# Path allowlist (gitignore-style). Hooks below skip any tool input
+# whose target matches a pattern here. Defaults exclude paths that
+# typically carry secrets so an Edit on `.env` does not exfiltrate
+# the path to the KB recall query.
+# -----------------------------------------------------------------
+if [ ! -e "${ALLOWLIST}" ]; then
+  read -r -d '' ALLOWLIST_DEFAULTS <<'ALLOW' || true
+# knowledge-system auto-MCP path allowlist (gitignore-style).
+# Lines starting with `#` are comments. Patterns match against the
+# full target path the hook is about to act on. Hooks SKIP any
+# match, so adding a line here disables auto-MCP for that path.
+#
+# Re-running the installer never overwrites this file once you've
+# customised it — only the initial install seeds these defaults.
+
+# Secrets-bearing files
+*.env
+.env*
+*.secret
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+secrets/**
+credentials*
+**/credentials/**
+id_rsa
+id_ed25519
+**/.ssh/**
+
+# Vault / KMS / cloud auth state
+.aws/**
+.config/gcloud/**
+.kube/config
+.kube/cache/**
+
+# Browser / OS keychains
+**/Library/Keychains/**
+**/Mozilla/Firefox/**
+**/Google/Chrome/Default/Login Data*
+ALLOW
+  write_file "${ALLOWLIST}" 0644 "${ALLOWLIST_DEFAULTS}"
+else
+  log "preserving existing ${ALLOWLIST}"
+fi
+
+# -----------------------------------------------------------------
+# Hook: PreToolUse — Edit/Write/MultiEdit recall
+# -----------------------------------------------------------------
+read -r -d '' PRE_TOOL_USE_EDIT_HOOK <<'HOOK' || true
+#!/usr/bin/env bash
+# PreToolUse hook for Edit/Write/MultiEdit. Looks at the file path
+# the agent is about to touch and runs a `knowledge.recall` against
+# it so prior captures referencing that file (or its module) surface
+# before the edit lands.
+#
+# Safety:
+#   - Honours KB_AUTO_MCP_DISABLED=1 (panic switch).
+#   - Honours `~/.claude/.knowledge-system-allowlist` (skip if match).
+#   - Per-session dedupe: only fires once per (session, file_path)
+#     so an N-Edit sequence on the same file does not stutter.
+#   - Silent on failure — the KB being unreachable must never block
+#     an edit.
+
+set -u
+
+[ "${KB_AUTO_MCP_DISABLED:-0}" = 1 ] && exit 0
+[ -z "${KB_BEARER_TOKEN:-}" ] && exit 0
+
+KB_URL="${KB_URL:-@KB_URL@}"
+STATE_DIR="${HOME}/.claude/state"
+ALLOWLIST="${HOME}/.claude/.knowledge-system-allowlist"
+
+input=$(cat 2>/dev/null || true)
+file_path=$(printf '%s' "${input}" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    inp = data.get("tool_input") or {}
+    print(inp.get("file_path") or inp.get("filePath") or inp.get("path") or "", end="")
+except Exception:
+    pass' 2>/dev/null || true)
+[ -z "${file_path}" ] && exit 0
+
+# Allowlist match — git-style globbing via a python helper. fnmatch
+# does not span `/`, so we walk pattern + path together.
+if [ -r "${ALLOWLIST}" ]; then
+  if python3 - "${ALLOWLIST}" "${file_path}" <<'PY' 2>/dev/null
+import fnmatch, sys, os
+allowlist, path = sys.argv[1], sys.argv[2]
+with open(allowlist) as f:
+    for line in f:
+        pat = line.strip()
+        if not pat or pat.startswith("#"): continue
+        # Translate `**` to a recursive match by relying on fnmatch's
+        # `*` against the basename and the full path.
+        if fnmatch.fnmatch(path, pat) or fnmatch.fnmatch(os.path.basename(path), pat):
+            sys.exit(0)
+    sys.exit(1)
+PY
+  then
+    exit 0
+  fi
+fi
+
+# Per-session dedupe: state/sessions/<session>/edit-<sha1-of-path>
+session="${CLAUDE_SESSION_ID:-unknown}"
+mkdir -p "${STATE_DIR}/sessions/${session}"
+marker="${STATE_DIR}/sessions/${session}/edit-$(printf '%s' "${file_path}" | shasum -a 1 | cut -c1-12)"
+[ -e "${marker}" ] && exit 0
+: > "${marker}"
+
+# Query: filename basename + the parent dir, plenty for FTS recall.
+basename=$(basename "${file_path}")
+parent=$(basename "$(dirname "${file_path}")")
+query="${basename} ${parent}"
+
+payload=$(python3 -c 'import json,sys; print(json.dumps({
+  "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+    "name":"knowledge.recall","arguments":{"query":sys.argv[1],"limit":2}}}))' "${query}")
+
+response=$(curl -sS --connect-timeout 3 --max-time 5 \
+  -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "${payload}" \
+  "${KB_URL}/mcp" 2>/dev/null) || exit 0
+
+printf '%s' "${response}" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    hits = data["result"]["structuredContent"]["hits"]
+    if not hits: sys.exit(0)
+    print()
+    print(f"## Related captures for this file")
+    for h in hits:
+        print(f"- **{h[\"title\"]}** (`{h[\"scope\"]}`) — id `{h[\"id\"]}`")
+        snip = h.get("snippet","").replace("\n"," ").strip()
+        if snip: print(f"  > {snip[:160]}")
+except Exception:
+    sys.exit(0)' 2>/dev/null || true
+HOOK
+
+write_file "${HOOKS_DIR}/pre-tool-use-edit-recall.sh" 0755 "${PRE_TOOL_USE_EDIT_HOOK}"
+
+# -----------------------------------------------------------------
+# Hook: PreToolUse — Bash matching `git commit` capture
+# -----------------------------------------------------------------
+read -r -d '' PRE_TOOL_USE_GIT_COMMIT_HOOK <<'HOOK' || true
+#!/usr/bin/env bash
+# PreToolUse hook for Bash. Fires only when the command looks like a
+# `git commit -m "..."` (or heredoc variant). Captures the commit
+# message as a `decision` note scoped to the current repo, with a
+# distinct source so the operator can bulk-revoke if needed.
+#
+# Skips merge / fixup / WIP commits — too noisy to capture.
+
+set -u
+
+[ "${KB_AUTO_MCP_DISABLED:-0}" = 1 ] && exit 0
+[ -z "${KB_BEARER_TOKEN:-}" ] && exit 0
+
+KB_URL="${KB_URL:-@KB_URL@}"
+
+input=$(cat 2>/dev/null || true)
+read -r tool command < <(printf '%s' "${input}" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    print(data.get("tool_name") or data.get("tool") or "", (data.get("tool_input") or {}).get("command") or "")
+except Exception:
+    print("")' 2>/dev/null)
+[ "${tool}" = "Bash" ] || exit 0
+
+# Match `git commit -m "..."` shape; both single and double quotes.
+case "${command}" in
+  *"git commit"*"-m"*) : ;;
+  *) exit 0 ;;
+esac
+# Skip noise: merge, fixup, WIP.
+case "${command}" in
+  *"fixup!"*|*"WIP"*|*"wip"*|*"Merge "*) exit 0 ;;
+esac
+
+# Extract the message: everything between the first matching quote
+# pair after `-m`. Defer the regex to python for sanity.
+title=$(printf '%s' "${command}" | python3 -c '
+import re, sys
+cmd = sys.stdin.read()
+m = re.search(r"-m\s+(\x27([^\x27]+)\x27|\"([^\"]+)\")", cmd)
+if not m: sys.exit(0)
+print(m.group(2) or m.group(3) or "", end="")' 2>/dev/null)
+[ -z "${title}" ] && exit 0
+
+# Scope: project:<repo-name> from origin URL, mirrors the
+# SessionStart hook's convention.
+project="$(git remote get-url origin 2>/dev/null | sed -e 's#\.git$##' -e 's#.*[/:]##')"
+[ -n "${project}" ] || project="$(basename "$(pwd)")"
+scope="project:${project}"
+
+body=$(cat <<BODY
+Commit message: ${title}
+
+Captured automatically by the auto-MCP \`git commit\` hook. The
+diff and surrounding context live in git history.
+BODY
+)
+
+payload=$(python3 -c 'import json,sys; print(json.dumps({
+  "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+    "name":"knowledge.capture_decision","arguments":{
+      "title": sys.argv[1],
+      "body": sys.argv[2],
+      "scope": sys.argv[3],
+      "source": "claude-code:auto-capture:git-commit",
+      "tags": ["auto-capture","git-commit"]
+    }}}))' "${title}" "${body}" "${scope}")
+
+curl -sS --connect-timeout 3 --max-time 5 \
+  -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "${payload}" \
+  "${KB_URL}/mcp" >/dev/null 2>&1 || true
+HOOK
+
+write_file "${HOOKS_DIR}/pre-tool-use-git-commit-capture.sh" 0755 "${PRE_TOOL_USE_GIT_COMMIT_HOOK}"
+
+# -----------------------------------------------------------------
+# Hook: Stop — session-digest auto-capture
+# -----------------------------------------------------------------
+read -r -d '' STOP_SESSION_DIGEST_HOOK <<'HOOK' || true
+#!/usr/bin/env bash
+# Stop hook: Reflexion-style session-digest auto-capture.
+#
+# Reads the transcript path from the hook input, asks
+# `knowledge.digest_transcript` for candidate captures, applies the
+# client-side policy (confidence floor, per-session token bucket,
+# cross-session dedupe via `knowledge.recall`), and emits survivors
+# via `knowledge.capture_lesson` with a distinct `source` so the
+# operator can bulk-revoke if needed.
+#
+# Async by default (Claude Code's settings.json marks Stop hooks
+# `async: true`), so blocking is fine here. Still bounded at ~60s.
+
+set -u
+
+[ "${KB_AUTO_MCP_DISABLED:-0}" = 1 ] && exit 0
+[ -z "${KB_BEARER_TOKEN:-}" ] && exit 0
+
+KB_URL="${KB_URL:-@KB_URL@}"
+STATE_DIR="${HOME}/.claude/state"
+LOG="${STATE_DIR}/auto-mcp.log"
+mkdir -p "${STATE_DIR}"
+
+input=$(cat 2>/dev/null || true)
+read -r session transcript_path < <(printf '%s' "${input}" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    print(data.get("session_id") or "unknown", data.get("transcript_path") or "")
+except Exception:
+    print("unknown")' 2>/dev/null)
+
+# Per-session token bucket: max 5 auto-captures per session.
+session_dir="${STATE_DIR}/sessions/${session}"
+mkdir -p "${session_dir}"
+remaining_file="${session_dir}/digest-budget"
+if [ -e "${remaining_file}" ]; then
+  remaining=$(cat "${remaining_file}")
+else
+  remaining=5
+fi
+
+# Load the transcript text. Claude Code stores it as JSONL; the
+# digest tool tolerates raw text, so a stringify-then-send is fine.
+if [ -z "${transcript_path}" ] || [ ! -r "${transcript_path}" ]; then
+  echo "$(date -u +%FT%TZ) stop-digest skip: no transcript" >>"${LOG}" 2>/dev/null
+  exit 0
+fi
+transcript=$(python3 -c '
+import json, sys
+out = []
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if not line: continue
+        try:
+            row = json.loads(line)
+            role = row.get("role") or row.get("type") or "?"
+            content = row.get("content") or row.get("text") or ""
+            if isinstance(content, list):
+                content = " ".join(p.get("text","") for p in content if isinstance(p, dict))
+            out.append(f"[{role}] {content}")
+        except Exception:
+            pass
+print("\n".join(out))' "${transcript_path}" 2>/dev/null) || exit 0
+
+[ -z "${transcript}" ] && exit 0
+
+# Server-side digest call.
+payload=$(python3 -c 'import json,sys; print(json.dumps({
+  "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+    "name":"knowledge.digest_transcript",
+    "arguments":{"transcript":sys.argv[1],"max_candidates":int(sys.argv[2])}}}))' \
+  "${transcript}" "${remaining}")
+
+response=$(curl -sS --connect-timeout 5 --max-time 60 \
+  -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "${payload}" \
+  "${KB_URL}/mcp" 2>/dev/null) || exit 0
+
+candidates=$(printf '%s' "${response}" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    print(json.dumps(data["result"]["structuredContent"]["candidates"]))
+except Exception:
+    print("[]")' 2>/dev/null || echo "[]")
+
+# Emit each survivor via capture_lesson. Server-side digest already
+# applied the confidence floor; we re-apply the per-session token
+# bucket here, and the source tagging.
+emitted=0
+while IFS= read -r line; do
+  [ -z "${line}" ] && continue
+  [ "${remaining}" -le 0 ] && break
+  title=$(printf '%s' "${line}" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["title"], end="")')
+  body=$(printf '%s' "${line}" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["body"], end="")')
+  topic=$(printf '%s' "${line}" | python3 -c 'import json,sys; print((json.loads(sys.stdin.read()).get("suggested_topic") or ""), end="")')
+  tags_json=$(printf '%s' "${line}" | python3 -c 'import json,sys; print(json.dumps(json.loads(sys.stdin.read()).get("suggested_tags") or []), end="")')
+  scope_arg=""
+  [ -n "${topic}" ] && scope_arg="topic:${topic}"
+  capture_payload=$(python3 -c 'import json,sys; print(json.dumps({
+    "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+      "name":"knowledge.capture_lesson","arguments":{
+        "title": sys.argv[1],
+        "body": sys.argv[2],
+        "scope": sys.argv[3] or None,
+        "source": "claude-code:auto-digest:" + sys.argv[4],
+        "tags": json.loads(sys.argv[5])
+      }}}))' "${title}" "${body}" "${scope_arg}" "${session}" "${tags_json}")
+  curl -sS --connect-timeout 3 --max-time 10 \
+    -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "${capture_payload}" \
+    "${KB_URL}/mcp" >/dev/null 2>&1 || continue
+  remaining=$((remaining - 1))
+  emitted=$((emitted + 1))
+  echo "$(date -u +%FT%TZ) stop-digest emit session=${session} title=${title}" >>"${LOG}" 2>/dev/null
+done < <(printf '%s' "${candidates}" | python3 -c '
+import json, sys
+try:
+    rows = json.load(sys.stdin)
+    for r in rows: print(json.dumps(r))
+except Exception:
+    pass' 2>/dev/null)
+
+echo "${remaining}" > "${remaining_file}"
+echo "$(date -u +%FT%TZ) stop-digest done session=${session} emitted=${emitted}" >>"${LOG}" 2>/dev/null
+HOOK
+
+write_file "${HOOKS_DIR}/stop-session-digest.sh" 0755 "${STOP_SESSION_DIGEST_HOOK}"
+
+# -----------------------------------------------------------------
 # Manifest
 # -----------------------------------------------------------------
 if [ "${DRY_RUN}" != 1 ]; then
@@ -236,20 +609,44 @@ cat <<EOF
 knowledge-system installer complete (${INSTALLER_VERSION}).
 
 Next steps:
-  1. Register the new hook in ${CLAUDE_HOME}/settings.json under
-     the "hooks.UserPromptSubmit" array:
-     {
-       "matcher": ".*",
-       "hooks": [
+
+  1. Register the four hooks in ${CLAUDE_HOME}/settings.json
+     under the matching "hooks.<event>" arrays. Suggested config
+     (drop into your settings under "hooks"):
+
+     "UserPromptSubmit": [
+       { "matcher": ".*", "hooks": [
          { "type": "command",
            "command": "${HOOKS_DIR}/user-prompt-submit-recall.sh",
-           "timeout": 5 }
-       ]
-     }
+           "timeout": 5 } ] } ],
+     "PreToolUse": [
+       { "matcher": "Edit|Write|MultiEdit", "hooks": [
+         { "type": "command",
+           "command": "${HOOKS_DIR}/pre-tool-use-edit-recall.sh",
+           "timeout": 5 } ] },
+       { "matcher": "Bash", "hooks": [
+         { "type": "command",
+           "command": "${HOOKS_DIR}/pre-tool-use-git-commit-capture.sh",
+           "timeout": 5 } ] } ],
+     "Stop": [
+       { "matcher": ".*", "hooks": [
+         { "type": "command",
+           "command": "${HOOKS_DIR}/stop-session-digest.sh",
+           "async": true,
+           "timeout": 60 } ] } ]
+
   2. Make sure KB_BEARER_TOKEN is set in your shell / Claude Code env:
        export KB_BEARER_TOKEN="<your-token>"
+
   3. Verify with:  curl -sS -H "Authorization: Bearer \$KB_BEARER_TOKEN" \\
                      ${KB_URL}/mcp -d '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+
+Safety controls:
+  - Panic switch:   export KB_AUTO_MCP_DISABLED=1   (turns every hook into a no-op).
+  - Path allowlist: edit ${ALLOWLIST}  (gitignore-style patterns).
+  - State + logs:   ${STATE_DIR}/auto-mcp.log + per-session dedupe under ${STATE_DIR}/sessions/.
+  - Provenance:     every auto-capture lands with source = "claude-code:auto-capture:<hook>"
+                    or "claude-code:auto-digest:<session>" so a bulk revoke is one SQL query.
 
 Run with --uninstall to remove every file this installer wrote.
 EOF
