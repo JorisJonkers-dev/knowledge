@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import tools.jackson.databind.JsonNode
+import tools.jackson.databind.json.JsonMapper
 
 /**
  * Streamable-HTTP MCP transport. Phase 4b ships only the envelope and
@@ -64,8 +65,34 @@ class McpController(
         val result =
             tools.call(name, arguments)
                 ?: return methodNotFoundResponse(request.id, "tools/call:$name")
-        return JsonRpcResponse(id = request.id, result = result)
+        return JsonRpcResponse(id = request.id, result = wrapToolResult(result))
     }
+
+    /**
+     * Wrap a tool's domain-shaped result map in the MCP `CallToolResult`
+     * envelope (spec 2025-06-18 §6.10): a `content` array containing at
+     * least one text block with the serialised payload, the same payload
+     * mirrored under `structuredContent`, and an `isError` flag.
+     *
+     * Without this wrapping the MCP client (Claude Code, Codex,
+     * `@modelcontextprotocol/sdk` clients) sees no `content` entries and
+     * renders the call as "completed with no output" — even though the
+     * tool actually returned hits / notes / relations. Capture tools
+     * suffer the same, just less visibly because the response is rarely
+     * read.
+     */
+    private fun wrapToolResult(result: Map<String, Any?>): Map<String, Any?> =
+        mapOf(
+            "content" to
+                listOf(
+                    mapOf(
+                        "type" to "text",
+                        "text" to MAPPER.writeValueAsString(result),
+                    ),
+                ),
+            "structuredContent" to result,
+            "isError" to false,
+        )
 
     private fun handleInitialize(): Map<String, Any> =
         mapOf(
@@ -105,5 +132,6 @@ class McpController(
 
     companion object {
         private const val PROTOCOL_VERSION = "2025-06-18"
+        private val MAPPER: JsonMapper = JsonMapper.builder().build()
     }
 }

@@ -99,7 +99,11 @@ class CaptureFlowIntegrationTest : IntegrationTestBase() {
                 ),
             )
 
-        val result = objectMapper.readTree(response)["result"]
+        // Unwrap the MCP `CallToolResult` envelope (spec 2025-06-18):
+        // every `tools/call` result is `{content, structuredContent,
+        // isError}`. The capture payload (id / type / scope / title /
+        // captured_at / vault_path) sits under `structuredContent`.
+        val result = objectMapper.readTree(response)["result"]["structuredContent"]
         val id = result["id"].asText()
         assertThat(id).matches("[0-9A-HJKMNP-TV-Z]{26}")
         assertThat(result["type"].asText()).isEqualTo("lesson")

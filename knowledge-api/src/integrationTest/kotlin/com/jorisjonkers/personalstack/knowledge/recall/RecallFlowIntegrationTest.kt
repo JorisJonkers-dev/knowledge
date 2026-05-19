@@ -80,7 +80,7 @@ class RecallFlowIntegrationTest : IntegrationTestBase() {
         val note = seed("title", "body", tags = setOf("kotlin", "mcp"))
 
         val result = call("knowledge.get_note", mapOf("id" to note.id))
-        val returned = objectMapper.readTree(result)["result"]["note"]
+        val returned = toolResult(result)["note"]
 
         assertThat(returned["id"].asText()).isEqualTo(note.id)
         assertThat(returned["title"].asText()).isEqualTo("title")
@@ -91,7 +91,7 @@ class RecallFlowIntegrationTest : IntegrationTestBase() {
     @Test
     fun `get_note returns null when no row matches`() {
         val result = call("knowledge.get_note", mapOf("id" to Ulid.generate()))
-        val note = objectMapper.readTree(result)["result"]["note"]
+        val note = toolResult(result)["note"]
         assertThat(note.isNull).isTrue
     }
 
@@ -104,7 +104,7 @@ class RecallFlowIntegrationTest : IntegrationTestBase() {
         val c = seed("newest", "z")
 
         val result = call("knowledge.list_recent", mapOf("limit" to 3, "scope" to "personal"))
-        val ids = objectMapper.readTree(result)["result"]["notes"].map { it["id"].asText() }
+        val ids = toolResult(result)["notes"].map { it["id"].asText() }
 
         assertThat(ids).containsExactly(c.id, b.id, a.id)
     }
@@ -116,7 +116,7 @@ class RecallFlowIntegrationTest : IntegrationTestBase() {
         seed("lesson2", "body", type = KbNoteType.LESSON)
 
         val result = call("knowledge.list_recent", mapOf("type" to "decision", "limit" to 10))
-        val titles = objectMapper.readTree(result)["result"]["notes"].map { it["title"].asText() }
+        val titles = toolResult(result)["notes"].map { it["title"].asText() }
         assertThat(titles).containsExactly("decision1")
     }
 
@@ -127,7 +127,7 @@ class RecallFlowIntegrationTest : IntegrationTestBase() {
         seed("misc", "the dawn was beautiful, no rockets here") // sneaky single match
 
         val result = call("knowledge.recall", mapOf("query" to "rocket", "limit" to 5))
-        val hits = objectMapper.readTree(result)["result"]["hits"]
+        val hits = toolResult(result)["hits"]
         val ids = hits.map { it["id"].asText() }
 
         // The "rocket"-heavy row wins; the kitchen-tips row mustn't appear.
@@ -144,7 +144,7 @@ class RecallFlowIntegrationTest : IntegrationTestBase() {
         val work = seed("work note", "rocket science", scope = "work")
 
         val result = call("knowledge.recall", mapOf("query" to "rocket", "scope" to "work"))
-        val ids = objectMapper.readTree(result)["result"]["hits"].map { it["id"].asText() }
+        val ids = toolResult(result)["hits"].map { it["id"].asText() }
         assertThat(ids).containsExactly(work.id)
     }
 
@@ -152,7 +152,7 @@ class RecallFlowIntegrationTest : IntegrationTestBase() {
     fun `recall with a blank query returns no hits without erroring`() {
         seed("anything", "rocket")
         val result = call("knowledge.recall", mapOf("query" to "  "))
-        val hits = objectMapper.readTree(result)["result"]["hits"]
+        val hits = toolResult(result)["hits"]
         assertThat(hits.size()).isZero
     }
 
@@ -190,7 +190,7 @@ class RecallFlowIntegrationTest : IntegrationTestBase() {
         )
 
         val result = call("knowledge.find_conflicts", mapOf("id" to older.id))
-        val rels = objectMapper.readTree(result)["result"]["relations"]
+        val rels = toolResult(result)["relations"]
         val predicates = rels.map { it["predicate"].asText() }.toSet()
 
         // older shows up twice — once as object of supersedes, once as
@@ -241,15 +241,13 @@ class RecallFlowIntegrationTest : IntegrationTestBase() {
         )
 
         // depth=1 reaches the direct neighbour only.
-        val depth1 =
-            objectMapper.readTree(call("knowledge.relations", mapOf("id" to a.id, "depth" to 1)))
-        val one = depth1["result"]["relations"].map { it["object_id"].asText() }.toSet()
+        val depth1 = toolResult(call("knowledge.relations", mapOf("id" to a.id, "depth" to 1)))
+        val one = depth1["relations"].map { it["object_id"].asText() }.toSet()
         assertThat(one).containsExactly(b.id)
 
         // depth=2 sees the b → c hop too.
-        val depth2 =
-            objectMapper.readTree(call("knowledge.relations", mapOf("id" to a.id, "depth" to 2)))
-        val two = depth2["result"]["relations"].map { it["object_id"].asText() }.toSet()
+        val depth2 = toolResult(call("knowledge.relations", mapOf("id" to a.id, "depth" to 2)))
+        val two = depth2["relations"].map { it["object_id"].asText() }.toSet()
         assertThat(two).containsExactlyInAnyOrder(b.id, c.id)
     }
 
@@ -257,6 +255,12 @@ class RecallFlowIntegrationTest : IntegrationTestBase() {
         name: String,
         arguments: Map<String, Any?>,
     ): String = rpcRaw("tools/call", mapOf("name" to name, "arguments" to arguments))
+
+    // Unwrap the MCP `tools/call` envelope: every result is now a
+    // `CallToolResult` with `{content, structuredContent, isError}` per
+    // MCP spec 2025-06-18. Tests assert on the domain shape sitting in
+    // `structuredContent`.
+    private fun toolResult(rawJson: String) = objectMapper.readTree(rawJson)["result"]["structuredContent"]
 
     private fun rpcRaw(
         method: String,
