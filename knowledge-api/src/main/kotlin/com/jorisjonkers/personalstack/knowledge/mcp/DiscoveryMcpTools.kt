@@ -1,9 +1,11 @@
 package com.jorisjonkers.personalstack.knowledge.mcp
 
 import com.jorisjonkers.personalstack.knowledge.discovery.DiscoveryService
+import com.jorisjonkers.personalstack.knowledge.domain.DuplicateMatch
 import com.jorisjonkers.personalstack.knowledge.domain.KbNote
 import com.jorisjonkers.personalstack.knowledge.domain.ScopeSummary
 import com.jorisjonkers.personalstack.knowledge.domain.SourceSummary
+import com.jorisjonkers.personalstack.knowledge.domain.SuggestedTopic
 import com.jorisjonkers.personalstack.knowledge.domain.TagSummary
 import com.jorisjonkers.personalstack.knowledge.domain.TopicStats
 import com.jorisjonkers.personalstack.knowledge.domain.TopicSummary
@@ -31,6 +33,7 @@ import org.springframework.stereotype.Component
  * and ship as follow-up PRs once the dynamic-topic schema is in
  * place.
  */
+@Suppress("TooManyFunctions") // Discovery surface lives here by design.
 @Component
 class DiscoveryMcpTools(
     private val discoveryService: DiscoveryService,
@@ -43,6 +46,8 @@ class DiscoveryMcpTools(
             listSourcesTool(),
             topicStatsTool(),
             listInboxTool(),
+            suggestTopicTool(),
+            findDuplicatesTool(),
         )
 
     // -------- tool definitions --------
@@ -192,6 +197,69 @@ class DiscoveryMcpTools(
             },
         )
 
+    private fun suggestTopicTool() =
+        McpTool(
+            descriptor =
+                toolDescriptor(
+                    name = "knowledge.suggest_topic",
+                    description =
+                        "Vector-backed topic suggestion. Embeds `text` and compares it " +
+                            "against each topic's centroid (mean of its members' embeddings). " +
+                            "Returns `[{slug, score, note_count}]` ordered by descending " +
+                            "cosine similarity. Use this when about to capture a note and " +
+                            "unsure which `topic:<slug>` to scope to — feed in the draft " +
+                            "title + body. Empty result means no embedded topics yet.",
+                    required = listOf("text"),
+                    properties =
+                        mapOf(
+                            "text" to mapOf("type" to "string"),
+                            "limit" to limitSchema(DEFAULT_SUGGEST_LIMIT),
+                        ),
+                ),
+            handler = { args ->
+                val text = JsonArguments.requireString(args, "text")
+                val limit = JsonArguments.optionalInt(args, "limit") ?: DEFAULT_SUGGEST_LIMIT
+                mapOf("suggestions" to discoveryService.suggestTopic(text, limit).map(::projectSuggestedTopic))
+            },
+        )
+
+    private fun findDuplicatesTool() =
+        McpTool(descriptor = findDuplicatesDescriptor(), handler = ::findDuplicatesHandler)
+
+    private fun findDuplicatesDescriptor() =
+        toolDescriptor(
+            name = "knowledge.find_duplicates",
+            description = FIND_DUPLICATES_DESCRIPTION,
+            required = emptyList(),
+            properties =
+                mapOf(
+                    "text" to mapOf("type" to "string"),
+                    "id" to mapOf("type" to "string"),
+                    "threshold" to
+                        mapOf(
+                            "type" to "number",
+                            "minimum" to 0.0,
+                            "maximum" to 1.0,
+                            "default" to DEFAULT_DUP_THRESHOLD,
+                        ),
+                    "limit" to limitSchema(DEFAULT_DUP_LIMIT),
+                ),
+        )
+
+    private fun findDuplicatesHandler(args: tools.jackson.databind.JsonNode): Map<String, Any?> {
+        val text = JsonArguments.optionalString(args, "text")
+        val id = JsonArguments.optionalString(args, "id")
+        val threshold = JsonArguments.optionalDouble(args, "threshold") ?: DEFAULT_DUP_THRESHOLD
+        val limit = JsonArguments.optionalInt(args, "limit") ?: DEFAULT_DUP_LIMIT
+        val matches =
+            when {
+                id != null -> discoveryService.findDuplicatesOf(id, threshold, limit)
+                text != null -> discoveryService.findDuplicates(text, threshold, limit)
+                else -> error("find_duplicates requires either `text` or `id` — neither was supplied")
+            }
+        return mapOf("matches" to matches.map(::projectDuplicate))
+    }
+
     // -------- projections --------
 
     private fun projectTopic(summary: TopicSummary): Map<String, Any?> =
@@ -244,6 +312,21 @@ class DiscoveryMcpTools(
             "tags" to note.tags.toList().sorted(),
         )
 
+    private fun projectSuggestedTopic(suggestion: SuggestedTopic): Map<String, Any?> =
+        mapOf(
+            "slug" to suggestion.slug,
+            "score" to suggestion.score,
+            "note_count" to suggestion.noteCount,
+        )
+
+    private fun projectDuplicate(match: DuplicateMatch): Map<String, Any?> =
+        mapOf(
+            "id" to match.id,
+            "title" to match.title,
+            "scope" to match.scope,
+            "score" to match.score,
+        )
+
     private fun limitSchema(default: Int) =
         mapOf(
             "type" to "integer",
@@ -259,5 +342,13 @@ class DiscoveryMcpTools(
         const val DEFAULT_TOP_TAGS = 10
         const val MAX_TOP_TAGS = 50
         const val MAX_LIMIT = 200
+        const val DEFAULT_SUGGEST_LIMIT = 5
+        const val DEFAULT_DUP_LIMIT = 5
+        const val DEFAULT_DUP_THRESHOLD = 0.85
+        const val FIND_DUPLICATES_DESCRIPTION =
+            "Vector-backed near-duplicate detection. Embeds `text` (or pulls the persisted " +
+                "embedding when `id` is provided) and returns rows whose cosine similarity " +
+                "is at or above `threshold` (default 0.85). Use pre-capture to avoid " +
+                "re-stating an existing lesson, or post-capture to audit possible dupes."
     }
 }

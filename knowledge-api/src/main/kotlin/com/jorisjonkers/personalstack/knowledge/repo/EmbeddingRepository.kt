@@ -1,6 +1,8 @@
 package com.jorisjonkers.personalstack.knowledge.repo
 
+import com.jorisjonkers.personalstack.knowledge.domain.DuplicateMatch
 import com.jorisjonkers.personalstack.knowledge.domain.RecallHit
+import com.jorisjonkers.personalstack.knowledge.domain.SuggestedTopic
 import org.jooq.DSLContext
 import org.jooq.Record
 import org.springframework.stereotype.Repository
@@ -53,6 +55,136 @@ class EmbeddingRepository(
 
         val binds: List<Any> = listOf(vectorLiteral) + scopeBinds + listOf(vectorLiteral, limit)
         return dsl.resultQuery(sql, *binds.toTypedArray()).fetch().map { record -> record.toRecallHit() }
+    }
+
+    /**
+     * `suggest_topic`: for each `topic:<slug>` scope, computes the
+     * centroid of its members' embeddings, returns the top-N closest
+     * to the query embedding.
+     *
+     * Postgres' pgvector lets the mean live inside the SQL — no
+     * application-side aggregation needed. We pre-compute the
+     * centroid per-query rather than caching it; at 10² – 10³ notes
+     * the GROUP BY scan is sub-millisecond and a stale cache would
+     * silently rot when a new note shifts a topic's centre of mass.
+     * Revisit when the corpus crosses 10⁴.
+     */
+    fun suggestTopic(
+        queryEmbedding: FloatArray,
+        limit: Int,
+    ): List<SuggestedTopic> {
+        if (queryEmbedding.isEmpty()) return emptyList()
+        val vectorLiteral = queryEmbedding.toPgVectorLiteral()
+        val sql =
+            """
+            SELECT
+                substring(scope from 7) AS slug,
+                count(*)::int AS note_count,
+                1 - (avg(embedding) <=> ?::vector) AS score
+            FROM kb_notes
+            WHERE scope LIKE 'topic:%'
+              AND embedding IS NOT NULL
+            GROUP BY scope
+            ORDER BY avg(embedding) <=> ?::vector ASC
+            LIMIT ?
+            """.trimIndent()
+        return dsl
+            .resultQuery(sql, vectorLiteral, vectorLiteral, limit)
+            .fetch()
+            .map { record ->
+                SuggestedTopic(
+                    slug = record.get("slug", String::class.java) ?: "",
+                    score = record.get("score", Double::class.java) ?: 0.0,
+                    noteCount = record.get("note_count", Int::class.java) ?: 0,
+                )
+            }
+    }
+
+    /**
+     * `find_duplicates`: rows whose embedding is within
+     * `(1 - threshold)` cosine distance of `queryEmbedding`. Note
+     * that `excludeId`, when supplied, lets the tool ignore the
+     * source row when looking up its near-neighbours.
+     */
+    fun findDuplicates(
+        queryEmbedding: FloatArray,
+        threshold: Double,
+        limit: Int,
+        excludeId: String? = null,
+    ): List<DuplicateMatch> {
+        if (queryEmbedding.isEmpty()) return emptyList()
+        val (sql, binds) = duplicateQuery(queryEmbedding, threshold, limit, excludeId)
+        return dsl
+            .resultQuery(sql, *binds.toTypedArray())
+            .fetch()
+            .map { record ->
+                DuplicateMatch(
+                    id = record.get("id", String::class.java) ?: "",
+                    title = record.get("title", String::class.java) ?: "",
+                    scope = record.get("scope", String::class.java) ?: "",
+                    score = record.get("score", Double::class.java) ?: 0.0,
+                )
+            }
+    }
+
+    private fun duplicateQuery(
+        queryEmbedding: FloatArray,
+        threshold: Double,
+        limit: Int,
+        excludeId: String?,
+    ): Pair<String, List<Any>> {
+        val vectorLiteral = queryEmbedding.toPgVectorLiteral()
+        val maxDistance = (1.0 - threshold).coerceIn(0.0, 2.0)
+        val excludeClause = if (excludeId != null) "AND id != ?" else ""
+        val sql =
+            """
+            SELECT id, scope, title,
+                   1 - (embedding <=> ?::vector) AS score
+            FROM kb_notes
+            WHERE embedding IS NOT NULL
+              AND (embedding <=> ?::vector) <= ?
+              $excludeClause
+            ORDER BY embedding <=> ?::vector ASC
+            LIMIT ?
+            """.trimIndent()
+        val binds: List<Any> =
+            buildList {
+                add(vectorLiteral)
+                add(vectorLiteral)
+                add(maxDistance)
+                if (excludeId != null) add(excludeId)
+                add(vectorLiteral)
+                add(limit)
+            }
+        return sql to binds
+    }
+
+    /**
+     * Fetch a row's persisted embedding so `find_duplicates(id=…)`
+     * can use the row's own vector as the query without re-embedding
+     * the note. Returns null when the row is missing or hasn't been
+     * embedded yet — caller chooses to either fail or re-embed.
+     */
+    fun embeddingFor(noteId: String): FloatArray? {
+        val raw =
+            dsl
+                .resultQuery(
+                    "SELECT embedding::text AS vec FROM kb_notes WHERE id = ? AND embedding IS NOT NULL",
+                    noteId,
+                ).fetchOne()
+                ?.get("vec", String::class.java)
+                ?: return null
+        return parsePgVectorLiteral(raw)
+    }
+
+    /**
+     * pgvector's text representation is `[v1,v2,…]`. Strip the
+     * brackets, split, parse. Single-statement return so the parse
+     * sits comfortably under detekt's `ReturnCount` ceiling.
+     */
+    private fun parsePgVectorLiteral(raw: String): FloatArray? {
+        val inner = raw.trim().removePrefix("[").removeSuffix("]")
+        return if (inner.isEmpty()) null else inner.split(",").map { it.trim().toFloat() }.toFloatArray()
     }
 
     private fun scopeFilter(scope: String?): Pair<String, List<Any>> =

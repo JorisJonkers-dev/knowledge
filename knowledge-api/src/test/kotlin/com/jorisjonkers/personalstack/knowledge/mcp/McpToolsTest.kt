@@ -88,6 +88,8 @@ class McpToolsTest {
             "knowledge.list_sources",
             "knowledge.topic_stats",
             "knowledge.list_inbox",
+            "knowledge.suggest_topic",
+            "knowledge.find_duplicates",
             "knowledge.add_topic",
             "knowledge.update_topic",
             "knowledge.merge_topics",
