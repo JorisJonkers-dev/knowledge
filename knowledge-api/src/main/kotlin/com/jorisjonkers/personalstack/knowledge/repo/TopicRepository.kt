@@ -192,6 +192,51 @@ class TopicRepository(
             .where(KB_NOTE_TAGS.TAG.eq(fromTag))
             .execute()
 
+    /**
+     * Merge multiple near-duplicate tags into a single canonical tag.
+     * Cohesive operation: when a note already carries `intoTag` *and*
+     * one of the `fromTags`, a simple UPDATE would fight the
+     * `(note_id, tag)` PK. The hand-written SQL takes the two-step
+     * shape (DELETE the dupes, then UPDATE the rest) so the merge is
+     * idempotent — re-running with the same arguments is a no-op.
+     *
+     * Returns `(rowsRenamed, rowsDeletedAsDupes)` so the audit row
+     * carries the full picture.
+     */
+    fun mergeTags(
+        fromTags: List<String>,
+        intoTag: String,
+    ): MergeTagsResult {
+        if (fromTags.isEmpty() || fromTags.all { it == intoTag }) {
+            return MergeTagsResult(rowsRenamed = 0, rowsDeletedAsDupes = 0)
+        }
+        val sources = fromTags.filter { it != intoTag }
+        // Drop rows where the note already has the target tag — the
+        // straight UPDATE would otherwise hit the PK.
+        val deleted =
+            dsl
+                .execute(
+                    "DELETE FROM kb_note_tags WHERE tag = ANY(?) " +
+                        "AND note_id IN (SELECT note_id FROM kb_note_tags WHERE tag = ?)",
+                    sources.toTypedArray(),
+                    intoTag,
+                )
+        // Rename the surviving source-tagged rows.
+        val renamed =
+            dsl
+                .execute(
+                    "UPDATE kb_note_tags SET tag = ? WHERE tag = ANY(?)",
+                    intoTag,
+                    sources.toTypedArray(),
+                )
+        return MergeTagsResult(rowsRenamed = renamed, rowsDeletedAsDupes = deleted)
+    }
+
+    data class MergeTagsResult(
+        val rowsRenamed: Int,
+        val rowsDeletedAsDupes: Int,
+    )
+
     private companion object {
         const val TOPIC_SCOPE_PREFIX = "topic:"
     }

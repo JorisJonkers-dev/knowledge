@@ -41,6 +41,7 @@ class AdminMcpTools(
             McpTool(updateTopicDescriptor(), ::updateTopicHandler),
             McpTool(mergeTopicsDescriptor(), ::mergeTopicsHandler),
             McpTool(renameTagDescriptor(), ::renameTagHandler),
+            McpTool(mergeTagsDescriptor(), ::mergeTagsHandler),
         )
 
     // -------- add_topic --------
@@ -193,6 +194,54 @@ class AdminMcpTools(
             "from" to fromTag,
             "to" to toTag,
             "rows_touched" to touched,
+            "actor" to actor,
+        )
+    }
+
+    // -------- merge_tags --------
+
+    private fun mergeTagsDescriptor(): Map<String, Any> =
+        toolDescriptor(
+            name = "knowledge.merge_tags",
+            description =
+                "Merge multiple near-duplicate tags into a single canonical tag. `from` " +
+                    "is the list of tags to fold; `into` is the survivor. Idempotent — " +
+                    "a re-run with the same arguments is a no-op. Notes carrying both a " +
+                    "source tag and the destination drop the source row rather than " +
+                    "duplicate the PK. Use after `list_tag_candidates` surfaces a cluster " +
+                    "for review. Admin-only.",
+            required = listOf("from", "into"),
+            properties =
+                mapOf(
+                    "from" to
+                        mapOf(
+                            "type" to "array",
+                            "items" to mapOf("type" to "string"),
+                            "minItems" to 1,
+                        ),
+                    "into" to mapOf("type" to "string"),
+                ),
+        )
+
+    private fun mergeTagsHandler(args: JsonNode): Map<String, Any?> {
+        val actor = adminAuthorization.requireAdmin()
+        val fromTags = JsonArguments.optionalStringArray(args, "from")
+        val intoTag = JsonArguments.requireString(args, "into")
+        if (fromTags.isEmpty()) error("merge_tags: `from` must contain at least one source tag")
+        val result = topicRepository.mergeTags(fromTags, intoTag)
+        log.info(
+            "merge_tags applied: from={} into={} renamed={} dropped_dupes={} actor={}",
+            fromTags,
+            intoTag,
+            result.rowsRenamed,
+            result.rowsDeletedAsDupes,
+            actor,
+        )
+        return mapOf(
+            "from" to fromTags,
+            "into" to intoTag,
+            "rows_renamed" to result.rowsRenamed,
+            "rows_dropped_as_dupes" to result.rowsDeletedAsDupes,
             "actor" to actor,
         )
     }

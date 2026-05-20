@@ -92,6 +92,7 @@ class McpToolsTest {
             "knowledge.update_topic",
             "knowledge.merge_topics",
             "knowledge.rename_tag",
+            "knowledge.merge_tags",
             "knowledge.digest_transcript",
             "knowledge.list_audit",
         )
