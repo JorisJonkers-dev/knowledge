@@ -58,12 +58,35 @@ class RecallService(
                 .createNotStarted("knowledge.recall", observationRegistry)
                 .lowCardinalityKeyValue("recall.mode", mode.wire)
                 .lowCardinalityKeyValue("recall.scope_kind", scopeKind(scope))
-        return observation.observe<List<RecallHit>> {
-            when (mode) {
-                RecallMode.FAST -> recallFast(query, scope, limit, observation)
-                RecallMode.HYBRID -> recallHybrid(query, scope, limit, observation)
-                RecallMode.DEEP -> recallDeep(query, scope, limit, observation)
+        val hits =
+            observation.observe<List<RecallHit>> {
+                when (mode) {
+                    RecallMode.FAST -> recallFast(query, scope, limit, observation)
+                    RecallMode.HYBRID -> recallHybrid(query, scope, limit, observation)
+                    RecallMode.DEEP -> recallDeep(query, scope, limit, observation)
+                }
             }
+        bumpRecallStats(hits)
+        return hits
+    }
+
+    /**
+     * Cognee-style usage bump: bookkeeps which rows the operator
+     * actually consumes, so the reranker (and future stale-note
+     * detection) can layer a usage signal on top of pure semantic
+     * similarity.
+     *
+     * Synchronous + best-effort — the UPDATE is single-statement,
+     * indexed-lookup, sub-millisecond at our scale. A failure here
+     * never bubbles up; the recall response already serialised.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun bumpRecallStats(hits: List<RecallHit>) {
+        if (hits.isEmpty()) return
+        try {
+            noteRepository.bumpRecallStats(hits.map { it.id })
+        } catch (ex: RuntimeException) {
+            log.warn("recall: usage-stats bump failed (count={})", hits.size, ex)
         }
     }
 

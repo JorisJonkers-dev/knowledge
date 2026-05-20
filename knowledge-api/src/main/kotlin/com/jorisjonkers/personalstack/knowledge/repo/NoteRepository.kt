@@ -239,6 +239,29 @@ class NoteRepository(
             tags = tags,
         )
 
+    /**
+     * Bump `recall_count` + `last_recalled_at` on one or more rows.
+     * Used by the recall path as a fire-and-forget UPDATE so the
+     * reranker (and future stale-note detection) has a "what does the
+     * operator actually use" signal layered on top of pure semantic
+     * similarity. Hand-written SQL because `recall_count + 1` is
+     * awkward to express in jOOQ DSL without round-tripping the
+     * current value.
+     *
+     * Returns the number of rows touched. Caller usually doesn't
+     * care — 0 means the ids were stale by the time the bump fired,
+     * which is non-fatal.
+     */
+    fun bumpRecallStats(ids: Collection<String>): Int {
+        if (ids.isEmpty()) return 0
+        return dsl.execute(
+            "UPDATE kb_notes " +
+                "SET recall_count = recall_count + 1, last_recalled_at = NOW() " +
+                "WHERE id = ANY(?)",
+            ids.toTypedArray(),
+        )
+    }
+
     @Suppress("UNCHECKED_CAST", "SwallowedException")
     private fun parseProps(raw: String?): Map<String, Any?> {
         if (raw.isNullOrBlank()) return emptyMap()

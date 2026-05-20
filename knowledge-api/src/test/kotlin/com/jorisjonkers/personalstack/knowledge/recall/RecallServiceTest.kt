@@ -13,7 +13,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 
 class RecallServiceTest {
-    private val noteRepository = mockk<NoteRepository>()
+    private val noteRepository = mockk<NoteRepository>(relaxed = true)
     private val recallRepository = mockk<RecallRepository>()
     private val embeddingRepository = mockk<EmbeddingRepository>()
     private val queryEmbedder = mockk<QueryEmbedder>()
@@ -149,6 +149,26 @@ class RecallServiceTest {
         every { noteRepository.listRecent("work", KbNoteType.DECISION, 7) } returns emptyList()
         service().listRecent("work", KbNoteType.DECISION, 7)
         verify(exactly = 1) { noteRepository.listRecent("work", KbNoteType.DECISION, 7) }
+    }
+
+    @Test
+    fun `recall bumps usage stats for every returned hit`() {
+        every { recallRepository.recall("rockets", "personal", 5) } returns
+            listOf(hit("ID-A"), hit("ID-B"))
+
+        service().recall("rockets", "personal", 5, RecallMode.FAST)
+
+        verify(exactly = 1) { noteRepository.bumpRecallStats(listOf("ID-A", "ID-B")) }
+    }
+
+    @Test
+    fun `recall swallows a usage-stats bump failure rather than 500ing`() {
+        every { recallRepository.recall("rockets", "personal", 5) } returns listOf(hit("ID-A"))
+        every { noteRepository.bumpRecallStats(any()) } throws RuntimeException("db down")
+
+        val hits = service().recall("rockets", "personal", 5, RecallMode.FAST)
+
+        assertThat(hits.map { it.id }).containsExactly("ID-A")
     }
 
     @Test
