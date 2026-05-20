@@ -31,7 +31,7 @@ dependencies {
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("org.springframework.boot:spring-boot-starter-jooq")
     implementation("org.jooq:jooq")
-    implementation("tools.jackson.module:jackson-module-kotlin:3.1.2")
+    implementation("tools.jackson.module:jackson-module-kotlin:3.1.3")
     runtimeOnly("org.postgresql:postgresql")
     // Tracing runtime jars — adds micrometer-tracing bridge + OTLP exporter
     // so the OTel javaagent's MDC enrichment + auto-instrumentation activate
