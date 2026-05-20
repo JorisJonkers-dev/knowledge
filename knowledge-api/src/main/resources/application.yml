@@ -46,7 +46,13 @@ spring:
         ApplicationName: knowledge-api
   flyway:
     enabled: true
-    locations: classpath:db/migration
+    # Two locations: `db/migration` is the codegen-safe tree (jOOQ's
+    # DDLDatabase parses every file here, so the SQL subset stays inside
+    # what H2-compatible parsing can handle — no JSONB, no GIN, no
+    # vector(N)). `db/migration-pg` holds Postgres-only DDL the runtime
+    # needs but codegen must never see (pgvector columns, HNSW indexes,
+    # GIN indexes, JSONB, …). Both are merged by Flyway on version.
+    locations: classpath:db/migration,classpath:db/migration-pg
     # LightRAG's Python ingest worker creates its own tables on first run.
     # baselineOnMigrate lets Flyway adopt that existing schema instead of
     # erroring on the non-empty database; baselineVersion=0 so V1+ migrations
@@ -79,3 +85,26 @@ server:
   port: ${SERVER_PORT:8080}
   servlet:
     context-path: /
+
+knowledge:
+  recall:
+    # Default mode for `knowledge.recall`. `fast` = FTS-only (Phase 4c-2
+    # baseline), `hybrid` = FTS + pgvector + RRF fusion. Stays `fast`
+    # until the curator has finished embedding the existing corpus —
+    # see [[knowledge-system-retrieval-architecture-design-proposal]].
+    default-mode: ${KB_RECALL_DEFAULT_MODE:fast}
+    # Reciprocal-rank-fusion constant. Literature default; raising it
+    # damps lower-ranked hits more aggressively. Don't touch without
+    # an eval set in hand.
+    rrf-k: ${KB_RECALL_RRF_K:60}
+  ollama:
+    # Ollama OpenAI-compat base URL (with `/v1`). Same default the
+    # curator uses; override in deployment.yaml when the cluster DNS
+    # name diverges.
+    base-url: ${OLLAMA_BASE_URL:http://ollama.knowledge-system.svc.cluster.local:11434/v1}
+    # Embedding model the recall path uses to embed the user's query.
+    # MUST match the model the curator embeds notes with — different
+    # families produce incompatible embedding spaces. Bump both
+    # together.
+    embedding-model: ${KB_EMBED_MODEL:qwen3-embedding:0.6b}
+    request-timeout-seconds: ${OLLAMA_REQUEST_TIMEOUT_SECONDS:5}

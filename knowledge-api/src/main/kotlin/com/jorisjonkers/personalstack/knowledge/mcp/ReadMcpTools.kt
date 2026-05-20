@@ -6,6 +6,7 @@ import com.jorisjonkers.personalstack.knowledge.domain.KbNote
 import com.jorisjonkers.personalstack.knowledge.domain.KbNoteType
 import com.jorisjonkers.personalstack.knowledge.domain.KbRelation
 import com.jorisjonkers.personalstack.knowledge.domain.RecallHit
+import com.jorisjonkers.personalstack.knowledge.recall.RecallMode
 import com.jorisjonkers.personalstack.knowledge.recall.RecallService
 import org.springframework.stereotype.Component
 import tools.jackson.databind.JsonNode
@@ -97,23 +98,13 @@ class ReadMcpTools(
     private fun recallDescriptor() =
         toolDescriptor(
             name = "knowledge.recall",
-            description =
-                "Full-text search over kb_notes title + body. Returns top-N by ts_rank, highest first. " +
-                    "The pgvector ANN leg layers on top in a follow-up.",
+            description = RECALL_TOOL_DESCRIPTION,
             required = listOf("query"),
             properties =
                 mapOf(
                     "query" to mapOf("type" to "string"),
-                    "scope" to
-                        mapOf(
-                            "type" to "string",
-                            "description" to
-                                "Restrict to a single scope (`topic:<slug>` / `project:<repo>` / " +
-                                "`agent:<name>`). Pass `all` to include every scope including " +
-                                "untriaged `_inbox`. Omit for the curated default — every " +
-                                "scope except `_inbox` and assistant-private agent scopes " +
-                                "(`agent:_shared` stays visible).",
-                        ),
+                    "mode" to recallModeProperty(),
+                    "scope" to recallScopeProperty(),
                     "limit" to
                         mapOf(
                             "type" to "integer",
@@ -124,18 +115,51 @@ class ReadMcpTools(
                 ),
         )
 
+    private fun recallModeProperty() =
+        mapOf(
+            "type" to "string",
+            "enum" to RecallMode.entries.map { it.wire },
+            "description" to
+                "fast = FTS only; hybrid = FTS + vector + RRF; deep = hybrid + " +
+                "graph + rerank (currently aliases hybrid).",
+        )
+
+    private fun recallScopeProperty() =
+        mapOf(
+            "type" to "string",
+            "description" to
+                "Restrict to a single scope (`topic:<slug>` / `project:<repo>` / " +
+                "`agent:<name>`). Pass `all` to include every scope including " +
+                "untriaged `_inbox`. Omit for the curated default — every " +
+                "scope except `_inbox` and assistant-private agent scopes " +
+                "(`agent:_shared` stays visible).",
+        )
+
     private fun recallHandler(args: JsonNode): Map<String, Any?> {
         // `query` is "required" by the schema, but a whitespace-only value
         // should produce zero hits, not a 500 — agents sometimes forward
         // an empty prompt verbatim. The repository already short-circuits
         // on blank.
+        //
+        // `mode` is optional — omit to let the server decide via
+        // `knowledge.recall.default-mode`. An unknown wire string falls
+        // back to the server default rather than 400ing, because callers
+        // shouldn't have to bump their tool definitions in lockstep when
+        // a new mode lands (`deep` in a follow-up).
+        val resolvedMode =
+            JsonArguments.optionalString(args, "mode")?.let(RecallMode::fromWire)
+                ?: recallService.defaultMode
         val hits =
             recallService.recall(
                 query = JsonArguments.rawText(args, "query").orEmpty(),
                 scope = JsonArguments.optionalString(args, "scope"),
                 limit = JsonArguments.optionalInt(args, "limit") ?: DEFAULT_RECALL_LIMIT,
+                mode = resolvedMode,
             )
-        return mapOf("hits" to hits.map(::projectHit))
+        return mapOf(
+            "hits" to hits.map(::projectHit),
+            "mode" to resolvedMode.wire,
+        )
     }
 
     private fun listRecentDescriptor() =
@@ -216,6 +240,14 @@ class ReadMcpTools(
         private const val DEFAULT_RECENT_LIMIT = 20
         private const val MAX_LIMIT = 100
         private const val DEFAULT_RELATION_DEPTH = 1
+
+        private const val RECALL_TOOL_DESCRIPTION =
+            "Layered recall over kb_notes. `mode=fast` is single-leg Postgres FTS (~50 ms p50). " +
+                "`mode=hybrid` adds the pgvector ANN leg and fuses with Reciprocal Rank Fusion " +
+                "(~100-300 ms once Ollama is warm). `mode=deep` reserves the slot for LightRAG " +
+                "graph recall + listwise rerank — today it aliases to `hybrid`. Server-side " +
+                "default is configurable (`knowledge.recall.default-mode`); when omitted, the " +
+                "server's choice applies."
 
         // Hard ceiling for the agent-facing depth; the repo enforces
         // its own (private) ceiling underneath, so this just keeps the

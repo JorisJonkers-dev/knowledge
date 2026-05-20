@@ -2,8 +2,10 @@ package com.jorisjonkers.personalstack.knowledge.recall
 
 import com.jorisjonkers.personalstack.knowledge.domain.KbNoteType
 import com.jorisjonkers.personalstack.knowledge.domain.RecallHit
+import com.jorisjonkers.personalstack.knowledge.repo.EmbeddingRepository
 import com.jorisjonkers.personalstack.knowledge.repo.NoteRepository
 import com.jorisjonkers.personalstack.knowledge.repo.RecallRepository
+import io.micrometer.observation.ObservationRegistry
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -13,46 +15,119 @@ import org.junit.jupiter.api.Test
 class RecallServiceTest {
     private val noteRepository = mockk<NoteRepository>()
     private val recallRepository = mockk<RecallRepository>()
-    private val service = RecallService(noteRepository, recallRepository)
+    private val embeddingRepository = mockk<EmbeddingRepository>()
+    private val queryEmbedder = mockk<QueryEmbedder>()
+
+    private fun service(defaultModeWire: String = "fast"): RecallService =
+        RecallService(
+            noteRepository = noteRepository,
+            recallRepository = recallRepository,
+            embeddingRepository = embeddingRepository,
+            queryEmbedder = queryEmbedder,
+            observationRegistry = ObservationRegistry.NOOP,
+            defaultModeWire = defaultModeWire,
+            rrfK = 60,
+        )
+
+    private fun hit(
+        id: String,
+        score: Double = 0.4,
+    ) = RecallHit(
+        id = id,
+        type = "lesson",
+        scope = "personal",
+        title = "t-$id",
+        snippet = "s",
+        score = score,
+    )
 
     @Test
-    fun `recall delegates to the recall repository with the same args`() {
-        every { recallRepository.recall("rockets", "personal", 5) } returns
-            listOf(
-                RecallHit(
-                    id = "01HXYZ",
-                    type = "lesson",
-                    scope = "personal",
-                    title = "t",
-                    snippet = "s",
-                    score = 0.4,
-                ),
-            )
+    fun `fast mode delegates to the FTS repository only`() {
+        every { recallRepository.recall("rockets", "personal", 5) } returns listOf(hit("01HXYZ"))
 
-        val hits = service.recall("rockets", "personal", 5)
+        val hits = service().recall("rockets", "personal", 5, RecallMode.FAST)
 
-        assertThat(hits).hasSize(1)
+        assertThat(hits).extracting<String> { it.id }.containsExactly("01HXYZ")
         verify(exactly = 1) { recallRepository.recall("rockets", "personal", 5) }
+        verify(exactly = 0) { queryEmbedder.embed(any()) }
+    }
+
+    @Test
+    fun `default mode is read from config when no mode argument is supplied`() {
+        every { recallRepository.recall("rockets", "personal", 5) } returns listOf(hit("01HXYZ"))
+
+        // No `mode` argument — service falls back to its configured default.
+        service(defaultModeWire = "fast").recall("rockets", "personal", 5)
+
+        verify(exactly = 1) { recallRepository.recall("rockets", "personal", 5) }
+        verify(exactly = 0) { queryEmbedder.embed(any()) }
+    }
+
+    @Test
+    fun `hybrid mode runs both legs and RRF-fuses the result`() {
+        // The service over-fetches by 3× from each leg to give RRF tail rows
+        // to fuse — that constant is internal so the test pins it via the
+        // requested limit pass-through rather than asserting the multiplier.
+        every { recallRepository.recall("rockets", "personal", 15) } returns
+            listOf(hit("ID-A"), hit("ID-B"), hit("ID-C"))
+        every { queryEmbedder.embed("rockets") } returns floatArrayOf(0.1f, 0.2f, 0.3f)
+        every { embeddingRepository.recallVector(any(), "personal", 15) } returns
+            listOf(hit("ID-B"), hit("ID-D"))
+
+        val hits = service().recall("rockets", "personal", 5, RecallMode.HYBRID)
+
+        // ID-B is in both legs → wins RRF; the other survivors come in by
+        // single-leg rank (A and C from FTS, D from vector).
+        assertThat(hits.first().id).isEqualTo("ID-B")
+        assertThat(hits.map { it.id }).containsExactlyInAnyOrder("ID-B", "ID-A", "ID-C", "ID-D")
+    }
+
+    @Test
+    fun `hybrid mode degrades gracefully when the embedder throws`() {
+        every { recallRepository.recall("rockets", "personal", 15) } returns
+            listOf(hit("ID-A"), hit("ID-B"))
+        every { queryEmbedder.embed("rockets") } throws RuntimeException("ollama down")
+
+        val hits = service().recall("rockets", "personal", 5, RecallMode.HYBRID)
+
+        // Vector leg dropped; FTS hits flow through (after the single-leg
+        // RRF fuse, which is a no-op rank-preserving transform).
+        assertThat(hits.map { it.id }).containsExactly("ID-A", "ID-B")
+        verify(exactly = 1) { queryEmbedder.embed("rockets") }
+        verify(exactly = 0) { embeddingRepository.recallVector(any(), any(), any()) }
+    }
+
+    @Test
+    fun `deep mode currently aliases hybrid`() {
+        every { recallRepository.recall("rockets", "personal", 15) } returns listOf(hit("ID-A"))
+        every { queryEmbedder.embed("rockets") } returns floatArrayOf(0.1f)
+        every { embeddingRepository.recallVector(any(), "personal", 15) } returns emptyList()
+
+        service().recall("rockets", "personal", 5, RecallMode.DEEP)
+
+        // Same call surface as HYBRID — both legs invoked.
+        verify(exactly = 1) { recallRepository.recall("rockets", "personal", 15) }
+        verify(exactly = 1) { queryEmbedder.embed("rockets") }
     }
 
     @Test
     fun `getNote delegates by id`() {
         every { noteRepository.findById("01HXYZ") } returns null
-        assertThat(service.getNote("01HXYZ")).isNull()
+        assertThat(service().getNote("01HXYZ")).isNull()
         verify(exactly = 1) { noteRepository.findById("01HXYZ") }
     }
 
     @Test
     fun `listRecent passes scope, type, and limit through unchanged`() {
         every { noteRepository.listRecent("work", KbNoteType.DECISION, 7) } returns emptyList()
-        service.listRecent("work", KbNoteType.DECISION, 7)
+        service().listRecent("work", KbNoteType.DECISION, 7)
         verify(exactly = 1) { noteRepository.listRecent("work", KbNoteType.DECISION, 7) }
     }
 
     @Test
     fun `findConflicts delegates by id`() {
         every { noteRepository.findConflicts("01HXYZ") } returns emptyList()
-        service.findConflicts("01HXYZ")
+        service().findConflicts("01HXYZ")
         verify(exactly = 1) { noteRepository.findConflicts("01HXYZ") }
     }
 }

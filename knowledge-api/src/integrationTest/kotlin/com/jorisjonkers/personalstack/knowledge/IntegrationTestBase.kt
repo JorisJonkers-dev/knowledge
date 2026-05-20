@@ -27,8 +27,19 @@ abstract class IntegrationTestBase {
     }
 
     companion object {
+        // pgvector/pgvector:pg17 is the upstream Postgres image with the
+        // pgvector extension pre-built. Required since V9 adds the
+        // `embedding vector(1024)` column and the HNSW index — the bare
+        // `postgres:17-alpine` image errors on `CREATE EXTENSION vector`.
+        // The image still presents as `PostgreSQLContainer` (PG 17 with
+        // the same defaults); wrapping it via `DockerImageName.asCompatibleSubstituteFor`
+        // keeps Testcontainers' Postgres-specific waitFor / jdbcUrl logic.
         private val postgres =
-            PostgreSQLContainer("postgres:17-alpine").apply {
+            PostgreSQLContainer(
+                org.testcontainers.utility.DockerImageName
+                    .parse("pgvector/pgvector:pg17")
+                    .asCompatibleSubstituteFor("postgres"),
+            ).apply {
                 withDatabaseName("knowledge_db")
                 withUsername("kb_user")
                 withPassword("kb_password")
