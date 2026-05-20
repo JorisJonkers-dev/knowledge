@@ -17,6 +17,7 @@ class RecallServiceTest {
     private val recallRepository = mockk<RecallRepository>()
     private val embeddingRepository = mockk<EmbeddingRepository>()
     private val queryEmbedder = mockk<QueryEmbedder>()
+    private val reranker = mockk<Reranker>()
 
     private fun service(defaultModeWire: String = "fast"): RecallService =
         RecallService(
@@ -24,6 +25,7 @@ class RecallServiceTest {
             recallRepository = recallRepository,
             embeddingRepository = embeddingRepository,
             queryEmbedder = queryEmbedder,
+            reranker = reranker,
             observationRegistry = ObservationRegistry.NOOP,
             defaultModeWire = defaultModeWire,
             rrfK = 60,
@@ -98,16 +100,41 @@ class RecallServiceTest {
     }
 
     @Test
-    fun `deep mode currently aliases hybrid`() {
-        every { recallRepository.recall("rockets", "personal", 15) } returns listOf(hit("ID-A"))
+    fun `deep mode reranks the hybrid output and truncates to limit`() {
+        // mode=deep over-fetches by an additional factor on top of the
+        // 3x hybrid over-fetch so the reranker has tail rows. Per the
+        // RERANK_OVERFETCH_FACTOR = 2 and limit=5, the hybrid call
+        // sees limit=10 internally — which over-fetches by 3 again
+        // for the FTS leg → 30.
+        every { recallRepository.recall("rockets", "personal", 30) } returns
+            listOf(hit("ID-A"), hit("ID-B"), hit("ID-C"))
+        every { queryEmbedder.embed("rockets") } returns floatArrayOf(0.1f, 0.2f)
+        every { embeddingRepository.recallVector(any(), "personal", 30) } returns
+            listOf(hit("ID-B"), hit("ID-D"))
+        // Reranker reorders: D leaps to top, A drops to last.
+        every { reranker.rerank("rockets", any(), 5) } answers {
+            val input = secondArg<List<RecallHit>>()
+            listOf("ID-D", "ID-B", "ID-A", "ID-C").mapNotNull { id ->
+                input.firstOrNull { it.id == id }
+            }
+        }
+
+        val hits = service().recall("rockets", "personal", 5, RecallMode.DEEP)
+
+        assertThat(hits.map { it.id }).containsExactly("ID-D", "ID-B", "ID-A", "ID-C")
+        verify(exactly = 1) { reranker.rerank("rockets", any(), 5) }
+    }
+
+    @Test
+    fun `deep mode skips the reranker when only one candidate survives`() {
+        every { recallRepository.recall("rockets", "personal", 30) } returns listOf(hit("ID-A"))
         every { queryEmbedder.embed("rockets") } returns floatArrayOf(0.1f)
-        every { embeddingRepository.recallVector(any(), "personal", 15) } returns emptyList()
+        every { embeddingRepository.recallVector(any(), "personal", 30) } returns emptyList()
 
-        service().recall("rockets", "personal", 5, RecallMode.DEEP)
+        val hits = service().recall("rockets", "personal", 5, RecallMode.DEEP)
 
-        // Same call surface as HYBRID — both legs invoked.
-        verify(exactly = 1) { recallRepository.recall("rockets", "personal", 15) }
-        verify(exactly = 1) { queryEmbedder.embed("rockets") }
+        assertThat(hits.map { it.id }).containsExactly("ID-A")
+        verify(exactly = 0) { reranker.rerank(any(), any(), any()) }
     }
 
     @Test

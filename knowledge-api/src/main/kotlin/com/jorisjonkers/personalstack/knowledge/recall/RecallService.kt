@@ -34,6 +34,7 @@ class RecallService(
     private val recallRepository: RecallRepository,
     private val embeddingRepository: EmbeddingRepository,
     private val queryEmbedder: QueryEmbedder,
+    private val reranker: Reranker,
     private val observationRegistry: ObservationRegistry,
     @param:Value("\${knowledge.recall.default-mode:fast}")
     private val defaultModeWire: String,
@@ -61,12 +62,29 @@ class RecallService(
             when (mode) {
                 RecallMode.FAST -> recallFast(query, scope, limit, observation)
                 RecallMode.HYBRID -> recallHybrid(query, scope, limit, observation)
-                // LightRAG + listwise rerank layer over the hybrid pipeline
-                // in a follow-up PR. Until then DEEP transparently aliases
-                // HYBRID so agents that opt into "best mode" don't error.
-                RecallMode.DEEP -> recallHybrid(query, scope, limit, observation)
+                RecallMode.DEEP -> recallDeep(query, scope, limit, observation)
             }
         }
+    }
+
+    private fun recallDeep(
+        query: String,
+        scope: String?,
+        limit: Int,
+        observation: io.micrometer.observation.Observation,
+    ): List<RecallHit> {
+        // Pull a deeper candidate set so the listwise reranker has tail
+        // rows to consider — same shape as the hybrid leg but over-
+        // fetched. The reranker truncates back to `limit` before return.
+        val fused = recallHybrid(query, scope, limit * RERANK_OVERFETCH_FACTOR, observation)
+        if (fused.size <= 1) {
+            observation.lowCardinalityKeyValue("recall.rerank_used", "false")
+            return fused.take(limit)
+        }
+        val reranked = reranker.rerank(query, fused, keep = limit)
+        observation.lowCardinalityKeyValue("recall.rerank_used", "true")
+        observation.highCardinalityKeyValue("recall.reranked_hits", reranked.size.toString())
+        return reranked
     }
 
     fun getNote(id: String): KbNote? = noteRepository.findById(id)
@@ -156,5 +174,11 @@ class RecallService(
         // the literature default is 2-3× the user-facing limit. Keep it
         // small enough that the vector index hit stays sub-millisecond.
         private const val VECTOR_OVERFETCH_FACTOR = 3
+
+        // Deep mode adds the reranker pass on top of the RRF-fused
+        // hybrid output. Over-fetch by another factor so the reranker
+        // can lift a tail item into the top-K — the precision uplift
+        // is wasted if every fused candidate is already a "top hit".
+        private const val RERANK_OVERFETCH_FACTOR = 2
     }
 }
