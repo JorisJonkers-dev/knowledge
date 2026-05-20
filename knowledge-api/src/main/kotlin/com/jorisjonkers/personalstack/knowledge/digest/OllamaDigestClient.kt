@@ -1,5 +1,6 @@
 package com.jorisjonkers.personalstack.knowledge.digest
 
+import com.jorisjonkers.personalstack.knowledge.ollama.OllamaChatEndpointResolver
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.MediaType
 import org.springframework.stereotype.Component
@@ -20,47 +21,62 @@ import java.time.Duration
  * Ollama's GBNF grammar enforces the structure at sampling time
  * rather than relying on the model to honour a prompt.
  *
+ * Endpoint selection is delegated to [OllamaChatEndpointResolver] —
+ * the resolver probes the heavy host-native endpoint at startup +
+ * on a fixed delay and picks heavy or light accordingly. Each
+ * `chatJson` call asks the resolver for the current choice and
+ * builds a per-call `RestClient` so a flip propagates without a pod
+ * restart. The cost is one builder allocation per digest call; with
+ * digests running on the order of seconds per call, the overhead is
+ * irrelevant.
+ *
  * The schema + system prompt live in [DigestService] (they're a
  * policy detail of the digest pass); this client only knows how to
  * call `/chat/completions` and unwrap the response envelope.
  */
 @Component
 class OllamaDigestClient(
-    @param:Value("\${knowledge.ollama.base-url:http://ollama.knowledge-system.svc.cluster.local:11434/v1}")
-    private val baseUrl: String,
-    @param:Value("\${knowledge.ollama.chat-model:qwen2.5:7b-instruct}")
-    private val chatModel: String,
+    private val endpointResolver: OllamaChatEndpointResolver,
     @param:Value("\${knowledge.ollama.timeout-seconds:180}")
     private val timeoutSeconds: Long,
 ) {
     private val mapper: JsonMapper =
         JsonMapper.builder().addModule(KotlinModule.Builder().build()).build()
 
-    private val client: RestClient =
-        RestClient
-            .builder()
-            .baseUrl(baseUrl)
-            .build()
-
     fun chatJson(
         systemPrompt: String,
         userPrompt: String,
         responseSchema: Map<String, Any?>,
     ): JsonNode {
+        val endpoint = endpointResolver.current()
+        val client =
+            RestClient
+                .builder()
+                .baseUrl(endpoint.baseUrl)
+                .build()
         val raw =
             client
                 .post()
                 .uri("/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("X-Request-Timeout", Duration.ofSeconds(timeoutSeconds).toString())
-                .body(mapper.writeValueAsString(buildPayload(systemPrompt, userPrompt, responseSchema)))
-                .retrieve()
+                .body(
+                    mapper.writeValueAsString(
+                        buildPayload(
+                            chatModel = endpoint.model,
+                            systemPrompt = systemPrompt,
+                            userPrompt = userPrompt,
+                            responseSchema = responseSchema,
+                        ),
+                    ),
+                ).retrieve()
                 .body<String>()
                 ?: error("Ollama returned an empty body")
         return extractContent(raw)
     }
 
     private fun buildPayload(
+        chatModel: String,
         systemPrompt: String,
         userPrompt: String,
         responseSchema: Map<String, Any?>,

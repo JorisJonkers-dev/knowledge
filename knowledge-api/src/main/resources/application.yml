@@ -102,6 +102,21 @@ knowledge:
     # curator uses; override in deployment.yaml when the cluster DNS
     # name diverges.
     base-url: ${OLLAMA_BASE_URL:http://ollama.knowledge-system.svc.cluster.local:11434/v1}
+    # Heavy endpoint — host-native Ollama on enschede-rx7900xtx-1
+    # (RX 7900 XTX, 24 GiB VRAM) exposed via the selector-less
+    # `ollama-heavy.utility-system` Service. When set, the digest
+    # client's OllamaChatEndpointResolver probes this endpoint at
+    # startup + every `heavy-probe-cache-seconds`; a 2xx response
+    # routes the chat call here with `heavy-chat-model`, anything
+    # else stays on the in-cluster CPU Ollama with `chat-model`.
+    # Embedding + reranker paths never look here — flipping
+    # embedding models per pass would force the curator's backfill
+    # into permanent re-embedding. Unset by default so dev / smoke
+    # environments stay light-only.
+    heavy-base-url: ${OLLAMA_HEAVY_BASE_URL:}
+    heavy-chat-model: ${OLLAMA_HEAVY_CHAT_MODEL:qwen2.5:14b-instruct}
+    heavy-probe-timeout-ms: ${OLLAMA_HEAVY_PROBE_TIMEOUT_MS:2000}
+    heavy-probe-cache-seconds: ${OLLAMA_HEAVY_PROBE_CACHE_SECONDS:120}
     # Embedding model the recall path uses to embed the user's query.
     # MUST match the model the curator embeds notes with — different
     # families produce incompatible embedding spaces. Bump both

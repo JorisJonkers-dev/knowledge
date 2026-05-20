@@ -7,9 +7,16 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.runApplication
 import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
+import org.springframework.scheduling.annotation.EnableScheduling
 
+// @EnableScheduling activates OllamaChatEndpointResolver.refresh()'s
+// `@Scheduled` annotation so the heavy/light Ollama probe re-runs on
+// the configured cadence. Without it the resolver only runs once at
+// boot and a node coming back online would never get picked up
+// without a pod restart.
 @SpringBootApplication(scanBasePackages = ["com.jorisjonkers.personalstack"])
 @EnableConfigurationProperties(McpBearerProperties::class)
+@EnableScheduling
 class KnowledgeApiApplication {
     // Plain bean instead of `@Component`: kotlin-common's
     // `ApplicationTracingAspect` CGLIB-proxies every Spring stereotype
