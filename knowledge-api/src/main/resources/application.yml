@@ -61,6 +61,13 @@ spring:
     baseline-version: '0'
   jooq:
     sql-dialect: postgres
+  # Spring Boot's HttpMessageConverter uses Jackson 2 for REST
+  # serialization. SNAKE_CASE keeps the new `/api/v1/knowledge/...`
+  # responses on the same wire shape as the MCP tools' hand-rolled
+  # Map<String, Any?> projections (which write snake_case keys
+  # literally and so aren't affected by the bean-naming strategy).
+  jackson:
+    property-naming-strategy: SNAKE_CASE
 
 management:
   endpoints:
@@ -85,6 +92,17 @@ server:
   port: ${SERVER_PORT:8080}
   servlet:
     context-path: /
+
+# Springdoc generates the OpenAPI 3 spec from the REST controllers under
+# `web/`. Knowledge-ui consumes the committed `openapi.json` via
+# `pnpm contract:generate`. The `/api/v1/api-docs` path matches
+# assistant-api's convention so the same drift-gate script works on
+# both services.
+springdoc:
+  api-docs:
+    path: /api/v1/api-docs
+  swagger-ui:
+    path: /api/v1/swagger-ui.html
 
 knowledge:
   recall:
