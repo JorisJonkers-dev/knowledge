@@ -5,6 +5,7 @@ package com.jorisjonkers.personalstack.knowledge.mcp
 
 import com.jorisjonkers.personalstack.knowledge.auth.McpAuthorizationError
 import org.springframework.http.MediaType
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
@@ -31,11 +32,18 @@ class McpController(
     @PostMapping(consumes = [MediaType.APPLICATION_JSON_VALUE])
     fun rpc(
         @RequestBody request: JsonRpcRequest,
-    ): JsonRpcResponse {
-        if (request.jsonrpc != "2.0") {
-            return invalidRequestResponse(request.id, "jsonrpc field must be \"2.0\"")
+    ): ResponseEntity<JsonRpcResponse> {
+        // JSON-RPC 2.0 notifications (no `id`) get an empty 202 reply per
+        // MCP Streamable-HTTP. Returning a JSON-RPC error here makes
+        // rmcp-based clients (Codex, etc.) abort the handshake right after
+        // they POST `notifications/initialized`.
+        if (request.id == null || request.id.isNull) {
+            return ResponseEntity.accepted().build()
         }
-        return dispatch(request)
+        if (request.jsonrpc != "2.0") {
+            return ResponseEntity.ok(invalidRequestResponse(request.id, "jsonrpc field must be \"2.0\""))
+        }
+        return ResponseEntity.ok(dispatch(request))
     }
 
     private fun dispatch(request: JsonRpcRequest): JsonRpcResponse =
