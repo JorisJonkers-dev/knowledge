@@ -18,7 +18,8 @@ import org.springframework.stereotype.Component
 class CaptureMcpTools(
     private val captureService: CaptureService,
 ) {
-    fun tools(): List<McpTool> = listOf(captureLessonTool(), captureDecisionTool(), ingestNoteTool())
+    fun tools(): List<McpTool> =
+        listOf(captureLessonTool(), captureDecisionTool(), ingestNoteTool(), captureQuestionTool())
 
     private fun captureLessonTool() =
         McpTool(
@@ -51,6 +52,36 @@ class CaptureMcpTools(
                             "Same shape as capture_lesson; the type field flips to `decision`.",
                 ),
             handler = { args -> projectNote(captureService.captureDecision(parse(args, "claude-code"))) },
+        )
+
+    private fun captureQuestionTool() =
+        McpTool(
+            descriptor =
+                captureDescriptor(
+                    name = "knowledge.capture_question",
+                    description =
+                        "Persist an AI-asked clarifying question to the knowledge base. " +
+                            "Use when the curator (or any agent operating on the KB) hits an " +
+                            "ambiguity it can't resolve from corpus context alone — an unknown " +
+                            "abbreviation, a topic-merge decision that needs operator judgement, " +
+                            "an ambiguous tag. The operator answers in the knowledge-ui " +
+                            "questions view; the curator folds the answer back into a topic / " +
+                            "tag / relation decision on the next pass. Type is forced to " +
+                            "`question` regardless of any other type the caller supplied.",
+                    extra =
+                        mapOf(
+                            "tags" to
+                                mapOf(
+                                    "type" to "array",
+                                    "items" to mapOf("type" to "string"),
+                                    "description" to
+                                        "Free-form tags. Convention: tag with the slug of the entity " +
+                                        "the question is about (e.g. `topic:postgres`, `tag:kotlin`) " +
+                                        "so the operator can group answers by target.",
+                                ),
+                        ),
+                ),
+            handler = { args -> projectNote(captureService.captureQuestion(parse(args, "claude-code"))) },
         )
 
     private fun ingestNoteTool() =

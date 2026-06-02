@@ -20,6 +20,8 @@ import com.jorisjonkers.personalstack.knowledge.domain.TagSummary
 import com.jorisjonkers.personalstack.knowledge.domain.TopicStats
 import com.jorisjonkers.personalstack.knowledge.domain.TopicSummary
 import com.jorisjonkers.personalstack.knowledge.recall.RecallService
+import com.jorisjonkers.personalstack.knowledge.repo.AuditRepository
+import com.jorisjonkers.personalstack.knowledge.repo.NoteRepository
 import com.jorisjonkers.personalstack.knowledge.repo.TopicRepository
 import io.mockk.every
 import io.mockk.mockk
@@ -38,6 +40,8 @@ class McpToolsTest {
     private val digestService = mockk<DigestService>(relaxed = true)
     private val auditService = mockk<AuditService>(relaxed = true)
     private val topicRepository = mockk<TopicRepository>(relaxed = true)
+    private val noteRepository = mockk<NoteRepository>(relaxed = true)
+    private val auditRepository = mockk<AuditRepository>(relaxed = true)
     private val adminAuthorization = mockk<AdminAuthorization>(relaxed = true)
 
     // Wire real Capture/Read/Discovery/Admin/Digest/AuditMcpTools
@@ -49,7 +53,7 @@ class McpToolsTest {
             CaptureMcpTools(captureService),
             ReadMcpTools(recallService),
             DiscoveryMcpTools(discoveryService),
-            AdminMcpTools(topicRepository, adminAuthorization),
+            AdminMcpTools(topicRepository, noteRepository, auditRepository, adminAuthorization),
             DigestMcpTools(digestService),
             AuditMcpTools(auditService),
         )
@@ -77,6 +81,7 @@ class McpToolsTest {
             "knowledge.capture_lesson",
             "knowledge.capture_decision",
             "knowledge.ingest_note",
+            "knowledge.capture_question",
             "knowledge.recall",
             "knowledge.get_note",
             "knowledge.list_recent",
@@ -95,6 +100,7 @@ class McpToolsTest {
             "knowledge.merge_topics",
             "knowledge.rename_tag",
             "knowledge.merge_tags",
+            "knowledge.reclassify_note",
             "knowledge.digest_transcript",
             "knowledge.list_audit",
         )

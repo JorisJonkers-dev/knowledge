@@ -262,6 +262,26 @@ class NoteRepository(
         )
     }
 
+    /**
+     * Mark a previously-promoted note for reclassification: flip its
+     * scope back to `_inbox` and clear its `topic_classified_at`
+     * watermark so the next curator pass picks it up alongside the
+     * fresh inbox files. Returns the number of rows touched (0 = id
+     * not found; >0 = ready for the next pass).
+     *
+     * `vault_path` is intentionally left as-is — the curator's
+     * promote pass will re-derive it from the new scope + type when
+     * it commits. The `kb_audit` row that captures the operator's
+     * guidance is written by the admin MCP tool, not here.
+     */
+    fun markForReclassify(id: String): Int =
+        dsl.execute(
+            "UPDATE kb_notes " +
+                "SET scope = '_inbox', topic_classified_at = NULL, updated_at = NOW() " +
+                "WHERE id = ?",
+            id,
+        )
+
     @Suppress("UNCHECKED_CAST", "SwallowedException")
     private fun parseProps(raw: String?): Map<String, Any?> {
         if (raw.isNullOrBlank()) return emptyMap()

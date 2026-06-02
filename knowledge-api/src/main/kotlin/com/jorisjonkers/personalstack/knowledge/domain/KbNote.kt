@@ -30,6 +30,15 @@ enum class KbNoteType(
     DECISION("decision"),
     NOTE("note"),
     FACT("fact"),
+
+    /**
+     * Question the AI asked itself (or the operator) while classifying
+     * or curating a note. Persisted via `knowledge.capture_question`
+     * so the operator can answer in the knowledge-ui questions view
+     * and the AI can fold the answer back into a topic/tag/relation
+     * decision. Filter cleanly by `list_recent(type=question)`.
+     */
+    QUESTION("question"),
     ;
 
     companion object {

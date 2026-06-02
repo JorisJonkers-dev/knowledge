@@ -48,6 +48,20 @@ class CaptureService(
         return note
     }
 
+    /**
+     * Persist an AI-asked clarifying question. Same write path as the
+     * other captures, but the type is forced to [KbNoteType.QUESTION]
+     * regardless of what the caller put in the request. The operator
+     * answers in the knowledge-ui questions view; the curator folds
+     * answered questions back into topic/tag/relation decisions on
+     * the next pass.
+     */
+    fun captureQuestion(request: CaptureRequest): KbNote {
+        val note = persist(request.copy(type = KbNoteType.QUESTION))
+        ingestPublisher.publishCapturedNote(note)
+        return note
+    }
+
     private fun persist(request: CaptureRequest): KbNote {
         val now = Instant.now()
         val note =

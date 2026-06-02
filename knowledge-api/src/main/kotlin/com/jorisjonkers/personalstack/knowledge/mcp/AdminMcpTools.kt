@@ -2,6 +2,8 @@ package com.jorisjonkers.personalstack.knowledge.mcp
 
 import com.jorisjonkers.personalstack.knowledge.auth.AdminAuthorization
 import com.jorisjonkers.personalstack.knowledge.domain.Topic
+import com.jorisjonkers.personalstack.knowledge.repo.AuditRepository
+import com.jorisjonkers.personalstack.knowledge.repo.NoteRepository
 import com.jorisjonkers.personalstack.knowledge.repo.TopicRepository
 import org.jooq.exception.IntegrityConstraintViolationException
 import org.slf4j.LoggerFactory
@@ -28,9 +30,12 @@ import tools.jackson.databind.JsonNode
  * verbose — the MCP `tools/list` payload is the agent-facing API,
  * and the description text is part of that contract.
  */
+@Suppress("TooManyFunctions") // Admin tool surface lives here by design — one descriptor + handler per tool.
 @Component
 class AdminMcpTools(
     private val topicRepository: TopicRepository,
+    private val noteRepository: NoteRepository,
+    private val auditRepository: AuditRepository,
     private val adminAuthorization: AdminAuthorization,
 ) {
     private val log = LoggerFactory.getLogger(AdminMcpTools::class.java)
@@ -42,6 +47,7 @@ class AdminMcpTools(
             McpTool(mergeTopicsDescriptor(), ::mergeTopicsHandler),
             McpTool(renameTagDescriptor(), ::renameTagHandler),
             McpTool(mergeTagsDescriptor(), ::mergeTagsHandler),
+            McpTool(reclassifyNoteDescriptor(), ::reclassifyNoteHandler),
         )
 
     // -------- add_topic --------
@@ -244,6 +250,94 @@ class AdminMcpTools(
             "rows_dropped_as_dupes" to result.rowsDeletedAsDupes,
             "actor" to actor,
         )
+    }
+
+    // -------- reclassify_note --------
+
+    private fun reclassifyNoteDescriptor(): Map<String, Any> =
+        toolDescriptor(
+            name = "knowledge.reclassify_note",
+            description =
+                "Mark a previously-promoted note for reclassification: flip its scope " +
+                    "back to `_inbox` so the next curator pass picks it up alongside the " +
+                    "fresh inbox files. Optional `guidance` is persisted to `kb_audit` " +
+                    "(`action=reclassify_requested`) and the curator's classifier prompt " +
+                    "folds it into the LLM input for the next pass. Use when the operator " +
+                    "(or an agent acting on their behalf) thinks a note ended up in the " +
+                    "wrong topic or carries wrong tags. Admin-only.",
+            required = listOf("id"),
+            properties =
+                mapOf(
+                    "id" to
+                        mapOf(
+                            "type" to "string",
+                            "description" to "ULID of the note to reclassify.",
+                        ),
+                    "guidance" to
+                        mapOf(
+                            "type" to "string",
+                            "description" to
+                                "Operator hint for the classifier (e.g. \"this should be " +
+                                "under topic:postgres, not topic:databases\"). " +
+                                "Persisted to kb_audit; the curator reads the latest " +
+                                "such row when re-classifying.",
+                        ),
+                ),
+        )
+
+    private fun reclassifyNoteHandler(args: JsonNode): Map<String, Any?> {
+        val actor = adminAuthorization.requireAdmin()
+        val id = JsonArguments.requireString(args, "id")
+        val guidance = JsonArguments.optionalString(args, "guidance")
+        val touched = noteRepository.markForReclassify(id)
+        if (touched == 0) {
+            throw IllegalStateException("reclassify_note: note `$id` does not exist")
+        }
+        val audit =
+            auditRepository.record(
+                actor = actor,
+                action = "reclassify_requested",
+                targetId = id,
+                targetKind = "note",
+                afterJson = reclassifyAuditPayload(guidance),
+            )
+        log.info(
+            "reclassify_note queued: id={} actor={} guidance_len={}",
+            id,
+            actor,
+            guidance?.length ?: 0,
+        )
+        return mapOf(
+            "id" to id,
+            "scope" to "_inbox",
+            "audit_id" to audit.id,
+            "actor" to actor,
+        )
+    }
+
+    private fun reclassifyAuditPayload(guidance: String?): String =
+        if (guidance != null) {
+            """{"guidance":${jsonStringLiteral(guidance)}}"""
+        } else {
+            "{}"
+        }
+
+    /**
+     * Minimal JSON-string encoder for the audit `afterJson` payload.
+     * The guidance arrives as untrusted operator text, so quotes /
+     * backslashes / control characters need escaping before they're
+     * embedded in a JSON literal. Kept inline rather than pulling
+     * in the Jackson mapper just for this one field.
+     */
+    private fun jsonStringLiteral(text: String): String {
+        val escaped =
+            text
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t")
+        return "\"$escaped\""
     }
 
     // -------- shared projection --------
