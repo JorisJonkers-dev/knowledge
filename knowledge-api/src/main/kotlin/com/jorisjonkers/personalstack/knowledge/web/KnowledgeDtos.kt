@@ -8,6 +8,8 @@ import com.jorisjonkers.personalstack.knowledge.domain.RecallHit
 import com.jorisjonkers.personalstack.knowledge.domain.ScopeSummary
 import com.jorisjonkers.personalstack.knowledge.domain.SourceSummary
 import com.jorisjonkers.personalstack.knowledge.domain.SuggestedTopic
+import com.jorisjonkers.personalstack.knowledge.domain.TagCandidateCluster
+import com.jorisjonkers.personalstack.knowledge.domain.TagCandidateMember
 import com.jorisjonkers.personalstack.knowledge.domain.TagSummary
 import com.jorisjonkers.personalstack.knowledge.domain.TopicStats
 import com.jorisjonkers.personalstack.knowledge.domain.TopicSummary
@@ -234,6 +236,31 @@ data class DuplicateMatchResponse(
                 title = match.title,
                 scope = match.scope,
                 score = match.score,
+            )
+    }
+}
+
+data class TagCandidateMemberResponse(
+    val tag: String,
+    val count: Int,
+) {
+    companion object {
+        fun from(member: TagCandidateMember): TagCandidateMemberResponse =
+            TagCandidateMemberResponse(tag = member.tag, count = member.count)
+    }
+}
+
+data class TagCandidateClusterResponse(
+    val members: List<TagCandidateMemberResponse>,
+    val suggestedCanonical: String,
+    val averageSimilarity: Double,
+) {
+    companion object {
+        fun from(cluster: TagCandidateCluster): TagCandidateClusterResponse =
+            TagCandidateClusterResponse(
+                members = cluster.members.map(TagCandidateMemberResponse::from),
+                suggestedCanonical = cluster.suggestedCanonical,
+                averageSimilarity = cluster.averageSimilarity,
             )
     }
 }

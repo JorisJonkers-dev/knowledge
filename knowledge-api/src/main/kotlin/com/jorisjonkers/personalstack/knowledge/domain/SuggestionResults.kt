@@ -28,3 +28,26 @@ data class DuplicateMatch(
     val scope: String,
     val score: Double,
 )
+
+/**
+ * One cluster of near-duplicate tags surfaced by
+ * `knowledge.list_tag_candidates`. Cluster members are tags whose
+ * pairwise cosine similarity is at or above the caller's threshold
+ * (default 0.85). `suggestedCanonical` is the member with the highest
+ * note-count — clusters with low note-counts are typically the
+ * stragglers that should fold into the canonical.
+ *
+ * The operator (or an agent acting on their behalf) feeds the cluster
+ * into `knowledge.merge_tags(from=members, into=suggestedCanonical)`
+ * — the UI never auto-merges; merges are gated by intent.
+ */
+data class TagCandidateCluster(
+    val members: List<TagCandidateMember>,
+    val suggestedCanonical: String,
+    val averageSimilarity: Double,
+)
+
+data class TagCandidateMember(
+    val tag: String,
+    val count: Int,
+)

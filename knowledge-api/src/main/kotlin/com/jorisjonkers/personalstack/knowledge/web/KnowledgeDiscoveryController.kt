@@ -1,6 +1,7 @@
 package com.jorisjonkers.personalstack.knowledge.web
 
 import com.jorisjonkers.personalstack.knowledge.discovery.DiscoveryService
+import com.jorisjonkers.personalstack.knowledge.discovery.TagClusterService
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController
 @RequestMapping("/api/v1/knowledge")
 class KnowledgeDiscoveryController(
     private val discoveryService: DiscoveryService,
+    private val tagClusterService: TagClusterService,
 ) {
     @GetMapping("/topics")
     fun listTopics(
@@ -111,6 +113,21 @@ class KnowledgeDiscoveryController(
         return DuplicatesResponse(matches = matches.map(DuplicateMatchResponse::from))
     }
 
+    @GetMapping("/tag_candidates")
+    fun listTagCandidates(
+        @RequestParam("min_count", defaultValue = "$DEFAULT_TAG_CANDIDATE_MIN_COUNT") minCount: Int,
+        @RequestParam("threshold", defaultValue = "$DEFAULT_TAG_CANDIDATE_THRESHOLD") threshold: Double,
+        @RequestParam("max_tags", defaultValue = "$DEFAULT_TAG_CANDIDATE_MAX_TAGS") maxTags: Int,
+    ): TagCandidatesResponse {
+        val clusters =
+            tagClusterService.listTagCandidates(
+                minCount = minCount,
+                threshold = threshold,
+                maxTags = maxTags.coerceIn(1, MAX_TAG_CANDIDATE_LIMIT),
+            )
+        return TagCandidatesResponse(clusters = clusters.map(TagCandidateClusterResponse::from))
+    }
+
     companion object {
         private const val DEFAULT_LIST_LIMIT = 50
         private const val DEFAULT_TAG_LIMIT = 100
@@ -121,6 +138,10 @@ class KnowledgeDiscoveryController(
         private const val DEFAULT_SUGGEST_LIMIT = 5
         private const val DEFAULT_DUP_LIMIT = 5
         private const val DEFAULT_DUP_THRESHOLD = 0.85
+        private const val DEFAULT_TAG_CANDIDATE_MIN_COUNT = 1
+        private const val DEFAULT_TAG_CANDIDATE_THRESHOLD = 0.85
+        private const val DEFAULT_TAG_CANDIDATE_MAX_TAGS = 200
+        private const val MAX_TAG_CANDIDATE_LIMIT = 500
     }
 }
 
@@ -150,4 +171,8 @@ data class SuggestionsResponse(
 
 data class DuplicatesResponse(
     val matches: List<DuplicateMatchResponse>,
+)
+
+data class TagCandidatesResponse(
+    val clusters: List<TagCandidateClusterResponse>,
 )

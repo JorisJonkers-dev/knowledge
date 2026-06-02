@@ -163,6 +163,56 @@
         }
       }
     },
+    "/api/v1/knowledge/tag_candidates": {
+      "get": {
+        "tags": ["knowledge-discovery-controller"],
+        "operationId": "listTagCandidates",
+        "parameters": [
+          {
+            "name": "min_count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 1
+            }
+          },
+          {
+            "name": "threshold",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "format": "double",
+              "default": 0.85
+            }
+          },
+          {
+            "name": "max_tags",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagCandidatesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/knowledge/suggest_topic": {
       "get": {
         "tags": ["knowledge-discovery-controller"],
@@ -855,6 +905,50 @@
           }
         },
         "required": ["tags"]
+      },
+      "TagCandidateClusterResponse": {
+        "type": "object",
+        "properties": {
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TagCandidateMemberResponse"
+            }
+          },
+          "suggestedCanonical": {
+            "type": "string"
+          },
+          "averageSimilarity": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": ["averageSimilarity", "members", "suggestedCanonical"]
+      },
+      "TagCandidateMemberResponse": {
+        "type": "object",
+        "properties": {
+          "tag": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "required": ["count", "tag"]
+      },
+      "TagCandidatesResponse": {
+        "type": "object",
+        "properties": {
+          "clusters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TagCandidateClusterResponse"
+            }
+          }
+        },
+        "required": ["clusters"]
       },
       "SuggestedTopicResponse": {
         "type": "object",
