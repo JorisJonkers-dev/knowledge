@@ -12,10 +12,11 @@ import org.springframework.stereotype.Component
 import tools.jackson.databind.JsonNode
 
 /**
- * Read-path MCP tools (Phase 4c-2): `recall`, `get_note`,
- * `list_recent`, `find_conflicts`. The recall tool runs Postgres'
- * built-in full-text search; the pgvector ANN leg + Ollama
- * embedding rerank layer on top in a follow-up.
+ * Read-path MCP tools: `recall`, `get_note`, `list_recent`,
+ * `find_conflicts`, `relations`. The recall tool supports three
+ * modes: fast (FTS only), hybrid (FTS + pgvector ANN + RRF), and
+ * deep (hybrid + listwise reranker). LightRAG graph recall is a
+ * planned follow-up, not the current deep implementation.
  */
 @Component
 class ReadMcpTools(
@@ -120,8 +121,8 @@ class ReadMcpTools(
             "type" to "string",
             "enum" to RecallMode.entries.map { it.wire },
             "description" to
-                "fast = FTS only; hybrid = FTS + vector + RRF; deep = hybrid + " +
-                "graph + rerank (currently aliases hybrid).",
+                "fast = FTS only; hybrid = FTS + vector + RRF; " +
+                "deep = hybrid + listwise reranker (LightRAG graph traversal is a planned follow-up).",
         )
 
     private fun recallScopeProperty() =
@@ -244,10 +245,10 @@ class ReadMcpTools(
         private const val RECALL_TOOL_DESCRIPTION =
             "Layered recall over kb_notes. `mode=fast` is single-leg Postgres FTS (~50 ms p50). " +
                 "`mode=hybrid` adds the pgvector ANN leg and fuses with Reciprocal Rank Fusion " +
-                "(~100-300 ms once Ollama is warm). `mode=deep` reserves the slot for LightRAG " +
-                "graph recall + listwise rerank — today it aliases to `hybrid`. Server-side " +
-                "default is configurable (`knowledge.recall.default-mode`); when omitted, the " +
-                "server's choice applies."
+                "(~100-300 ms once Ollama is warm). `mode=deep` runs hybrid retrieval and then " +
+                "applies a listwise reranker to lift non-obvious candidates — it does not currently " +
+                "add LightRAG graph traversal (planned follow-up). Server-side default is " +
+                "configurable (`knowledge.recall.default-mode`); when omitted, the server's choice applies."
 
         // Hard ceiling for the agent-facing depth; the repo enforces
         // its own (private) ceiling underneath, so this just keeps the
