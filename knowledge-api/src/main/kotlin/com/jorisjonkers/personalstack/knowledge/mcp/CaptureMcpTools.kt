@@ -128,6 +128,13 @@ class CaptureMcpTools(
             "scope" to mapOf("type" to "string", "description" to SCOPE_DESCRIPTION),
             "title" to mapOf("type" to "string"),
             "body" to mapOf("type" to "string"),
+            "source" to
+                mapOf(
+                    "type" to "string",
+                    "description" to
+                        "Capture provenance marker, for example " +
+                        "`assistant-ui:auto-capture:<session>` or `codex:auto-capture:git-commit`.",
+                ),
             "session_id" to
                 mapOf(
                     "type" to "string",

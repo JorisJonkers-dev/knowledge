@@ -217,7 +217,16 @@ class McpToolsTest {
             assertThat(required).containsExactlyInAnyOrder("title", "body")
             @Suppress("UNCHECKED_CAST")
             val properties = schema["properties"] as Map<String, Any>
-            assertThat(properties.keys).contains("scope", "title", "body", "session_id", "confidence", "vault_path")
+            assertThat(properties.keys)
+                .contains(
+                    "scope",
+                    "title",
+                    "body",
+                    "source",
+                    "session_id",
+                    "confidence",
+                    "vault_path",
+                )
         }
     }
 
