@@ -3,6 +3,7 @@ package com.jorisjonkers.personalstack.knowledge.repo
 import com.jorisjonkers.personalstack.knowledge.domain.RecallHit
 import org.jooq.DSLContext
 import org.jooq.Record
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Repository
 
 /**
@@ -15,8 +16,9 @@ import org.springframework.stereotype.Repository
  *
  * The query is hand-written rather than jOOQ-DSL because:
  *  - `to_tsvector(text)` is a Postgres-only function with no
- *    jOOQ-codegen mapping (intentional; the V1 schema avoided GIN
- *    indexes so jOOQ's H2-based DDLDatabase could still parse it).
+ *    jOOQ-codegen mapping. The matching runtime GIN expression index
+ *    lives in `db/migration-pg` so jOOQ's H2-backed DDLDatabase never
+ *    has to parse it.
  *  - The same `tsquery` expression appears in WHERE + ORDER BY, so
  *    we pass `query` twice as a positional bind to avoid a Postgres
  *    parser re-evaluation.
@@ -24,6 +26,8 @@ import org.springframework.stereotype.Repository
 @Repository
 class RecallRepository(
     private val dsl: DSLContext,
+    @param:Value("\${knowledge.recall.fts-query-timeout-seconds:5}")
+    private val queryTimeoutSeconds: Int,
 ) {
     fun recall(
         query: String,
@@ -32,29 +36,20 @@ class RecallRepository(
     ): List<RecallHit> {
         if (query.isBlank()) return emptyList()
 
-        // Scope semantics:
-        //   explicit value         → exact-match filter on `kb_notes.scope`.
-        //   `all`                  → no scope filter — search every scope.
-        //   omitted (null)         → "curated default": exclude rows still
-        //                            sitting under `_inbox` and exclude
-        //                            assistant-private agent scopes; let
-        //                            topic / project / `agent:_shared` /
-        //                            personal / work surface. Untriaged
-        //                            captures should not pollute default
-        //                            recall — they get rewritten by the
-        //                            curator anyway.
-        val (scopeClause, scopeBinds) =
-            when {
-                scope == null ->
-                    Pair(
-                        "AND scope != '_inbox' " +
-                            "AND (scope NOT LIKE 'agent:%' OR scope = 'agent:_shared')",
-                        emptyList<Any>(),
-                    )
-                scope.equals(SCOPE_ALL, ignoreCase = true) -> Pair("", emptyList<Any>())
-                else -> Pair("AND scope = ?", listOf<Any>(scope))
-            }
+        val (sql, binds) = recallQuery(query, scope, limit)
+        return dsl
+            .resultQueryWithBinds(sql, binds)
+            .queryTimeout(queryTimeoutSeconds)
+            .fetch()
+            .map { record -> record.toRecallHit() }
+    }
 
+    private fun recallQuery(
+        query: String,
+        scope: String?,
+        limit: Int,
+    ): Pair<String, List<Any>> {
+        val (scopeClause, scopeBinds) = scopeFilter(scope)
         val sql =
             """
             SELECT id, type, scope, title, body,
@@ -70,9 +65,24 @@ class RecallRepository(
             LIMIT ?
             """.trimIndent()
 
-        val binds: List<Any> = listOf(query, query) + scopeBinds + listOf(limit)
-        return dsl.resultQuery(sql, *binds.toTypedArray()).fetch().map { record -> record.toRecallHit() }
+        return sql to (listOf(query, query) + scopeBinds + listOf(limit))
     }
+
+    // Scope semantics:
+    //   explicit value -> exact-match filter on `kb_notes.scope`.
+    //   `all` -> no scope filter; search every scope.
+    //   omitted -> curated default: skip `_inbox` and private agent scopes.
+    private fun scopeFilter(scope: String?): Pair<String, List<Any>> =
+        when {
+            scope == null ->
+                Pair(
+                    "AND scope != '_inbox' " +
+                        "AND (scope NOT LIKE 'agent:%' OR scope = 'agent:_shared')",
+                    emptyList(),
+                )
+            scope.equals(SCOPE_ALL, ignoreCase = true) -> Pair("", emptyList())
+            else -> Pair("AND scope = ?", listOf(scope))
+        }
 
     private fun Record.toRecallHit(): RecallHit {
         val body = get("body", String::class.java) ?: ""

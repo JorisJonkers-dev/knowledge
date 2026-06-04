@@ -5,6 +5,7 @@ import com.jorisjonkers.personalstack.knowledge.domain.RecallHit
 import com.jorisjonkers.personalstack.knowledge.domain.SuggestedTopic
 import org.jooq.DSLContext
 import org.jooq.Record
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Repository
 
 /**
@@ -26,6 +27,8 @@ import org.springframework.stereotype.Repository
 @Repository
 class EmbeddingRepository(
     private val dsl: DSLContext,
+    @param:Value("\${knowledge.recall.vector-query-timeout-seconds:5}")
+    private val recallQueryTimeoutSeconds: Int,
 ) {
     fun recallVector(
         queryEmbedding: FloatArray,
@@ -54,7 +57,11 @@ class EmbeddingRepository(
             """.trimIndent()
 
         val binds: List<Any> = listOf(vectorLiteral) + scopeBinds + listOf(vectorLiteral, limit)
-        return dsl.resultQuery(sql, *binds.toTypedArray()).fetch().map { record -> record.toRecallHit() }
+        return dsl
+            .resultQueryWithBinds(sql, binds)
+            .queryTimeout(recallQueryTimeoutSeconds)
+            .fetch()
+            .map { record -> record.toRecallHit() }
     }
 
     /**
@@ -115,7 +122,7 @@ class EmbeddingRepository(
         if (queryEmbedding.isEmpty()) return emptyList()
         val (sql, binds) = duplicateQuery(queryEmbedding, threshold, limit, excludeId)
         return dsl
-            .resultQuery(sql, *binds.toTypedArray())
+            .resultQueryWithBinds(sql, binds)
             .fetch()
             .map { record ->
                 DuplicateMatch(

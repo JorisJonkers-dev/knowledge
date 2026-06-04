@@ -116,6 +116,11 @@ knowledge:
     # damps lower-ranked hits more aggressively. Don't touch without
     # an eval set in hand.
     rrf-k: ${KB_RECALL_RRF_K:60}
+    # Hard SQL guardrails for recall legs. Agent hooks have short
+    # client-side timeouts, so the server must fail fast enough to
+    # degrade cleanly instead of holding MCP calls open for a minute.
+    fts-query-timeout-seconds: ${KB_RECALL_FTS_QUERY_TIMEOUT_SECONDS:5}
+    vector-query-timeout-seconds: ${KB_RECALL_VECTOR_QUERY_TIMEOUT_SECONDS:5}
   ollama:
     # Ollama OpenAI-compat base URL (with `/v1`). Same default the
     # curator uses; override in deployment.yaml when the cluster DNS
