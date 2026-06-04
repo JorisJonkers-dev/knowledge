@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "description": "Offline recall regression cases for mistakes future agents should not repeat.",
+  "cases": [
+    {
+      "name": "forward auth blocks CLI tools",
+      "query": "vault login nil response pre-flight request public host",
+      "scope": "project:personal-stack",
+      "mode": "hybrid",
+      "limit": 3,
+      "maxRank": 3,
+      "expectedIds": ["EVAL-FORWARD-AUTH-CLI"],
+      "expectedTerms": ["port-forward", "forward-auth", "vault_addr"],
+      "seed": {
+        "fts": [
+          {
+            "id": "EVAL-FORWARD-AUTH-CLI",
+            "title": "Use port-forward for Vault CLI preflight",
+            "snippet": "Trigger: vault login returns nil response or pre-flight request failures on the public host. Correct rule: use kubectl port-forward and set VAULT_ADDR to the local listener because forward-auth blocks browser-oriented hosts for CLI tools.",
+            "score": 0.91,
+            "tags": ["vault", "forward-auth", "cli"]
+          },
+          {
+            "id": "EVAL-VAULT-UNRELATED",
+            "title": "Vault bootstrap policy shape",
+            "snippet": "Vault bootstrap writes Kubernetes auth roles and policies during platform bring-up.",
+            "score": 0.48,
+            "tags": ["vault"]
+          }
+        ],
+        "vector": [
+          {
+            "id": "EVAL-FORWARD-AUTH-CLI",
+            "title": "Use port-forward for Vault CLI preflight",
+            "snippet": "Vault CLI requests should bypass forward-auth by using port-forward and VAULT_ADDR on localhost.",
+            "score": 0.88,
+            "tags": ["vault", "forward-auth", "cli"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "keel match tag required",
+      "query": "keel force policy image stuck first sha",
+      "scope": "project:personal-stack",
+      "mode": "hybrid",
+      "limit": 3,
+      "maxRank": 3,
+      "expectedIds": ["EVAL-KEEL-MATCH-TAG"],
+      "expectedTerms": ["keel.sh/match-tag", "first sha", "policy"],
+      "seed": {
+        "fts": [
+          {
+            "id": "EVAL-KEEL-MATCH-TAG",
+            "title": "Keel policies require match-tag for first SHA rollout",
+            "snippet": "Trigger: Keel force or policy leaves an image stuck on the first SHA. Correct rule: include keel.sh/match-tag so Keel matches the mutable tag policy before replacing digest-pinned images.",
+            "score": 0.87,
+            "tags": ["keel", "gitops", "images"]
+          },
+          {
+            "id": "EVAL-IMAGE-UNRELATED",
+            "title": "Container image pull secret rotation",
+            "snippet": "Rotate registry pull secrets before expiring GitHub package tokens.",
+            "score": 0.41,
+            "tags": ["images"]
+          }
+        ],
+        "vector": [
+          {
+            "id": "EVAL-KEEL-MATCH-TAG",
+            "title": "Keel policies require match-tag for first SHA rollout",
+            "snippet": "When a first SHA appears stuck, check the Keel policy and keel.sh/match-tag annotation before forcing a rollout.",
+            "score": 0.82,
+            "tags": ["keel", "gitops", "images"]
+          }
+        ]
+      }
+    }
+  ]
+}
