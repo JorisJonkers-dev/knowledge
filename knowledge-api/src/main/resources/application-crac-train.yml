@@ -1,0 +1,41 @@
+# Profile activated by the CRaC training stage in CI (build-and-publish's
+# knowledge-api CRaC job). Drives synthetic local traffic against the running
+# JVM so the C1/C2 JIT tiers compile the request pipeline (Tomcat, the Spring
+# MVC chain, Jackson, jOOQ-generated SQL) before `Core.checkpointRestore()`
+# dumps the JVM. The checkpoint is then baked into the production image so a
+# fresh pod restores with the read path already hot.
+#
+# Combined with the CRaC-enabled Liberica JDK and the train stage's
+# `-XX:CRaCCheckpointTo=/opt/crac/checkpoint` flag (see the Dockerfile). A
+# plain boot is unaffected because `crac.train.enabled` defaults to false.
+crac:
+  train:
+    enabled: true
+    iterations: 200
+    checkpoint-after-warmup: true
+    endpoints:
+      # Actuator — restored pods serve probes instantly.
+      - /api/actuator/health
+      - /api/actuator/health/readiness
+      # jOOQ-backed discovery reads. No required query params and no Ollama
+      # dependency (recall stays in FTS-fast mode here), so each one drives
+      # the full Tomcat -> MVC -> Jackson -> jOOQ -> Postgres path. The /recall
+      # and MCP POST paths are intentionally omitted: recall's hybrid branch
+      # would need a live embedding model, and CracTrainingRunner only issues
+      # GETs.
+      - /api/v1/knowledge/topics
+      - /api/v1/knowledge/tags
+      - /api/v1/knowledge/scopes
+      - /api/v1/knowledge/sources
+      - /api/v1/knowledge/recent
+      - /api/v1/knowledge/inbox
+
+spring:
+  # The bean graph must wire fully so Hikari + the RabbitMQ template register
+  # their CRaC lifecycle hooks and close cleanly at checkpoint; if they never
+  # start they never register, and the restored graph diverges from a real
+  # boot. The CI job supplies Postgres (pgvector) + RabbitMQ sidecars. Vault
+  # stays off — training secrets come from plain env, not Vault.
+  cloud:
+    vault:
+      enabled: false
