@@ -24,6 +24,7 @@ readonly CODEX_HOOKS_DIR="${CODEX_HOME}/hooks"
 readonly CODEX_SKILLS_DIR="${CODEX_HOME}/skills"
 readonly CODEX_HOOKS_CONFIG="${CODEX_HOME}/hooks.json"
 readonly CODEX_MANIFEST="${CODEX_HOME}/.knowledge-system-version"
+readonly CODEX_ALLOWLIST="${CODEX_HOME}/.knowledge-system-allowlist"
 
 DRY_RUN=0
 UNINSTALL=0
@@ -133,12 +134,15 @@ claude_managed_paths=(
 
 codex_managed_paths=(
   "${CODEX_HOOKS_DIR}/kb-user-prompt-recall.sh"
+  "${CODEX_HOOKS_DIR}/pre-tool-use-edit-recall.sh"
+  "${CODEX_HOOKS_DIR}/pre-tool-use-git-commit-capture.sh"
   "${CODEX_HOOKS_DIR}/kb-stop-digest.sh"
   "${CODEX_SKILLS_DIR}/topics/SKILL.md"
   "${CODEX_SKILLS_DIR}/audit/SKILL.md"
   "${CODEX_SKILLS_DIR}/kb-first/SKILL.md"
   "${CODEX_SKILLS_DIR}/token-economy/SKILL.md"
   "${CODEX_SKILLS_DIR}/agent-session-bootstrap/SKILL.md"
+  "${CODEX_ALLOWLIST}"
   "${CODEX_HOOKS_CONFIG}"
 )
 
@@ -440,7 +444,7 @@ fi
 # typically carry secrets so an Edit on `.env` does not exfiltrate
 # the path to the KB recall query.
 # -----------------------------------------------------------------
-if [ "${INSTALL_CLAUDE}" = 1 ] && [ ! -e "${ALLOWLIST}" ]; then
+if [ "${INSTALL_CLAUDE}" = 1 ] || [ "${INSTALL_CODEX}" = 1 ]; then
   read -r -d '' ALLOWLIST_DEFAULTS <<'ALLOW' || true
 # knowledge-system auto-MCP path allowlist (gitignore-style).
 # Lines starting with `#` are comments. Patterns match against the
@@ -477,24 +481,33 @@ id_ed25519
 **/Mozilla/Firefox/**
 **/Google/Chrome/Default/Login Data*
 ALLOW
+fi
+
+if [ "${INSTALL_CLAUDE}" = 1 ] && [ ! -e "${ALLOWLIST}" ]; then
   write_file "${ALLOWLIST}" 0644 "${ALLOWLIST_DEFAULTS}"
 elif [ "${INSTALL_CLAUDE}" = 1 ]; then
   log "preserving existing ${ALLOWLIST}"
 fi
 
+if [ "${INSTALL_CODEX}" = 1 ] && [ ! -e "${CODEX_ALLOWLIST}" ]; then
+  write_file "${CODEX_ALLOWLIST}" 0644 "${ALLOWLIST_DEFAULTS}"
+elif [ "${INSTALL_CODEX}" = 1 ]; then
+  log "preserving existing ${CODEX_ALLOWLIST}"
+fi
+
 # -----------------------------------------------------------------
-# Hook: PreToolUse — Edit/Write/MultiEdit recall
+# Hook: PreToolUse — Edit/Write/MultiEdit/apply_patch recall
 # -----------------------------------------------------------------
 read -r -d '' PRE_TOOL_USE_EDIT_HOOK <<'HOOK' || true
 #!/usr/bin/env bash
-# PreToolUse hook for Edit/Write/MultiEdit. Looks at the file path
+# PreToolUse hook for Edit/Write/MultiEdit/apply_patch. Looks at the file path
 # the agent is about to touch and runs a `knowledge.recall` against
 # it so prior captures referencing that file (or its module) surface
 # before the edit lands.
 #
 # Safety:
 #   - Honours KB_AUTO_MCP_DISABLED=1 (panic switch).
-#   - Honours `~/.claude/.knowledge-system-allowlist` (skip if match).
+#   - Honours the client allowlist (skip if match).
 #   - Per-session dedupe: only fires once per (session, file_path)
 #     so an N-Edit sequence on the same file does not stutter.
 #   - Silent on failure — the KB being unreachable must never block
@@ -510,18 +523,52 @@ case "${KB_URL}" in
   */mcp) KB_MCP_URL="${KB_URL}" ;;
   *) KB_MCP_URL="${KB_URL%/}/mcp" ;;
 esac
-STATE_DIR="${HOME}/.claude/state"
-ALLOWLIST="${HOME}/.claude/.knowledge-system-allowlist"
+CLIENT_HOME="${KB_AUTO_MCP_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
+STATE_DIR="${KB_AUTO_MCP_STATE_DIR:-${CLIENT_HOME}/state}"
+ALLOWLIST="${KB_AUTO_MCP_ALLOWLIST:-${CLIENT_HOME}/.knowledge-system-allowlist}"
 
 input=$(cat 2>/dev/null || true)
 file_path=$(printf '%s' "${input}" | python3 -c '
-import json, sys
+import json, re, sys
 try:
     data = json.load(sys.stdin)
-    inp = data.get("tool_input") or {}
-    print(inp.get("file_path") or inp.get("filePath") or inp.get("path") or "", end="")
 except Exception:
-    pass' 2>/dev/null || true)
+    sys.exit(0)
+
+inputs = []
+for key in ("tool_input", "input", "arguments", "params"):
+    value = data.get(key)
+    if isinstance(value, dict):
+        inputs.append(value)
+tool = data.get("tool")
+if isinstance(tool, dict):
+    for key in ("input", "arguments", "params"):
+        value = tool.get(key)
+        if isinstance(value, dict):
+            inputs.append(value)
+
+for source in inputs + [data]:
+    for key in ("file_path", "filePath", "path", "target_file", "targetFile"):
+        value = source.get(key) if isinstance(source, dict) else None
+        if isinstance(value, str) and value.strip():
+            print(value.strip(), end="")
+            sys.exit(0)
+
+patch_parts = []
+for source in inputs + [data]:
+    if not isinstance(source, dict):
+        continue
+    for key in ("patch", "content", "body", "diff", "input"):
+        value = source.get(key)
+        if isinstance(value, str):
+            patch_parts.append(value)
+
+for line in "\n".join(patch_parts).splitlines():
+    match = re.match(r"^\*\*\* (?:Update|Add|Delete) File: (.+)$", line)
+    if match:
+        print(match.group(1).strip(), end="")
+        sys.exit(0)
+' 2>/dev/null || true)
 [ -z "${file_path}" ] && exit 0
 
 # Allowlist match — git-style globbing via a python helper. fnmatch
@@ -546,7 +593,7 @@ PY
 fi
 
 # Per-session dedupe: state/sessions/<session>/edit-<sha1-of-path>
-session="${CLAUDE_SESSION_ID:-unknown}"
+session="${CLAUDE_SESSION_ID:-${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-unknown}}}"
 mkdir -p "${STATE_DIR}/sessions/${session}"
 marker="${STATE_DIR}/sessions/${session}/edit-$(printf '%s' "${file_path}" | shasum -a 1 | cut -c1-12)"
 [ -e "${marker}" ] && exit 0
@@ -632,14 +679,50 @@ case "${KB_URL}" in
 esac
 
 input=$(cat 2>/dev/null || true)
-read -r tool command < <(printf '%s' "${input}" | python3 -c '
+parsed=$(printf '%s' "${input}" | python3 -c '
 import json, sys
 try:
     data = json.load(sys.stdin)
-    print(data.get("tool_name") or data.get("tool") or "", (data.get("tool_input") or {}).get("command") or "")
 except Exception:
-    print("")' 2>/dev/null)
-[ "${tool}" = "Bash" ] || exit 0
+    sys.exit(0)
+
+tool = data.get("tool_name") or data.get("name") or ""
+raw_tool = data.get("tool")
+if isinstance(raw_tool, str):
+    tool = tool or raw_tool
+elif isinstance(raw_tool, dict):
+    tool = tool or raw_tool.get("name") or ""
+
+inputs = []
+for key in ("tool_input", "input", "arguments", "params"):
+    value = data.get(key)
+    if isinstance(value, dict):
+        inputs.append(value)
+if isinstance(raw_tool, dict):
+    for key in ("input", "arguments", "params"):
+        value = raw_tool.get(key)
+        if isinstance(value, dict):
+            inputs.append(value)
+
+command = ""
+for source in inputs + [data]:
+    if not isinstance(source, dict):
+        continue
+    for key in ("command", "cmd", "script", "shell_command", "shellCommand"):
+        value = source.get(key)
+        if isinstance(value, str) and value.strip():
+            command = value.strip()
+            break
+    if command:
+        break
+
+print(f"{tool}\x1f{command}", end="")' 2>/dev/null || true)
+tool="${parsed%%$'\x1f'*}"
+command="${parsed#*$'\x1f'}"
+[ "${tool}" = "${parsed}" ] && command=""
+if [ -n "${tool}" ] && [ "${tool}" != "Bash" ] && [ "${tool}" != "bash" ]; then
+  exit 0
+fi
 
 # Match `git commit -m "..."` shape; both single and double quotes.
 case "${command}" in
@@ -670,20 +753,21 @@ scope="project:${project}"
 body=$(cat <<BODY
 Commit message: ${title}
 
-Captured automatically by the auto-MCP \`git commit\` hook. The
+Captured automatically by ${KB_AUTO_MCP_CLIENT_NAME:-the PreToolUse} \`git commit\` hook. The
 diff and surrounding context live in git history.
 BODY
 )
 
+source="${KB_AUTO_MCP_SOURCE:-claude-code:auto-capture:git-commit}"
 payload=$(python3 -c 'import json,sys; print(json.dumps({
   "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
     "name":"knowledge.capture_decision","arguments":{
       "title": sys.argv[1],
       "body": sys.argv[2],
       "scope": sys.argv[3],
-      "source": "claude-code:auto-capture:git-commit",
+      "source": sys.argv[4],
       "tags": ["auto-capture","git-commit"]
-    }}}))' "${title}" "${body}" "${scope}")
+    }}}))' "${title}" "${body}" "${scope}" "${source}")
 
 curl -sS --connect-timeout 3 --max-time 5 \
   -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
@@ -1048,6 +1132,30 @@ read -r -d '' CODEX_HOOKS_JSON <<HOOKS || true
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "env KB_AUTO_MCP_HOME=${CODEX_HOME} ${CODEX_HOOKS_DIR}/pre-tool-use-edit-recall.sh",
+            "timeout": 5,
+            "statusMessage": "Loading file KB context"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "env KB_AUTO_MCP_HOME=${CODEX_HOME} KB_AUTO_MCP_SOURCE=codex:auto-capture:git-commit KB_AUTO_MCP_CLIENT_NAME=Codex ${CODEX_HOOKS_DIR}/pre-tool-use-git-commit-capture.sh",
+            "timeout": 5,
+            "statusMessage": "Capturing commit decision"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -1066,6 +1174,8 @@ HOOKS
 
 if [ "${INSTALL_CODEX}" = 1 ]; then
   write_file "${CODEX_HOOKS_DIR}/kb-user-prompt-recall.sh" 0755 "${USER_PROMPT_SUBMIT_HOOK}"
+  write_file "${CODEX_HOOKS_DIR}/pre-tool-use-edit-recall.sh" 0755 "${PRE_TOOL_USE_EDIT_HOOK}"
+  write_file "${CODEX_HOOKS_DIR}/pre-tool-use-git-commit-capture.sh" 0755 "${PRE_TOOL_USE_GIT_COMMIT_HOOK}"
   write_file "${CODEX_HOOKS_DIR}/kb-stop-digest.sh" 0755 "${CODEX_STOP_DIGEST_HOOK}"
   write_file "${CODEX_SKILLS_DIR}/topics/SKILL.md" 0644 "${TOPICS_SKILL}"
   write_file "${CODEX_SKILLS_DIR}/audit/SKILL.md" 0644 "${AUDIT_SKILL}"
@@ -1148,7 +1258,8 @@ if [ "${INSTALL_CODEX}" = 1 ]; then
 
 Codex next steps:
 
-  1. ${CODEX_HOOKS_CONFIG} has been written with UserPromptSubmit and Stop hooks.
+  1. ${CODEX_HOOKS_CONFIG} has been written with UserPromptSubmit, PreToolUse,
+     and Stop hooks.
   2. Make sure KB_BEARER_TOKEN is set in the Codex environment:
        export KB_BEARER_TOKEN="<your-token>"
 EOF
@@ -1161,9 +1272,21 @@ Verify with:  curl -sS -H "Authorization: Bearer \$KB_BEARER_TOKEN" \\
 
 Safety controls:
   - Panic switch:   export KB_AUTO_MCP_DISABLED=1   (turns every hook into a no-op).
-  - Path allowlist: edit ${ALLOWLIST}  (gitignore-style patterns).
-  - State + logs:   ${STATE_DIR}/auto-mcp.log + per-session dedupe under ${STATE_DIR}/sessions/.
-  - Provenance:     every auto-capture lands with source = "claude-code:auto-capture:<hook>"
+EOF
+if [ "${INSTALL_CLAUDE}" = 1 ]; then
+  cat <<EOF
+  - Claude allowlist: edit ${ALLOWLIST}  (gitignore-style patterns).
+  - Claude state:     ${STATE_DIR}/auto-mcp.log + per-session dedupe under ${STATE_DIR}/sessions/.
+EOF
+fi
+if [ "${INSTALL_CODEX}" = 1 ]; then
+  cat <<EOF
+  - Codex allowlist:  edit ${CODEX_ALLOWLIST}  (gitignore-style patterns).
+  - Codex state:      ${CODEX_HOME}/state/auto-mcp.log + per-session dedupe under ${CODEX_HOME}/state/sessions/.
+EOF
+fi
+cat <<EOF
+  - Provenance:     every auto-capture lands with source = "<agent>:auto-capture:<hook>"
                     or "claude-code:auto-digest:<session>" so a bulk revoke is one SQL query.
 
 Run with --agent ${AGENT} --uninstall to remove every selected file this installer wrote.
