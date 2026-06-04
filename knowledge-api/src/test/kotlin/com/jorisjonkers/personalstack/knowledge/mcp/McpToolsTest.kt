@@ -15,6 +15,10 @@ import com.jorisjonkers.personalstack.knowledge.domain.KbNote
 import com.jorisjonkers.personalstack.knowledge.domain.KbNoteType
 import com.jorisjonkers.personalstack.knowledge.domain.KbRelation
 import com.jorisjonkers.personalstack.knowledge.domain.RecallHit
+import com.jorisjonkers.personalstack.knowledge.domain.ReviewBucket
+import com.jorisjonkers.personalstack.knowledge.domain.ReviewNote
+import com.jorisjonkers.personalstack.knowledge.domain.ReviewSuggestion
+import com.jorisjonkers.personalstack.knowledge.domain.ReviewSummary
 import com.jorisjonkers.personalstack.knowledge.domain.ScopeSummary
 import com.jorisjonkers.personalstack.knowledge.domain.SourceSummary
 import com.jorisjonkers.personalstack.knowledge.domain.TagCandidateCluster
@@ -26,6 +30,8 @@ import com.jorisjonkers.personalstack.knowledge.recall.RecallService
 import com.jorisjonkers.personalstack.knowledge.repo.AuditRepository
 import com.jorisjonkers.personalstack.knowledge.repo.NoteRepository
 import com.jorisjonkers.personalstack.knowledge.repo.TopicRepository
+import com.jorisjonkers.personalstack.knowledge.review.ReviewService
+import com.jorisjonkers.personalstack.knowledge.review.ReviewSummaryRequest
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -43,6 +49,7 @@ class McpToolsTest {
     private val tagClusterService = mockk<TagClusterService>(relaxed = true)
     private val digestService = mockk<DigestService>(relaxed = true)
     private val auditService = mockk<AuditService>(relaxed = true)
+    private val reviewService = mockk<ReviewService>(relaxed = true)
     private val topicRepository = mockk<TopicRepository>(relaxed = true)
     private val noteRepository = mockk<NoteRepository>(relaxed = true)
     private val auditRepository = mockk<AuditRepository>(relaxed = true)
@@ -60,6 +67,7 @@ class McpToolsTest {
             AdminMcpTools(topicRepository, noteRepository, auditRepository, adminAuthorization),
             DigestMcpTools(digestService),
             AuditMcpTools(auditService),
+            ReviewMcpTools(reviewService),
         )
     private val mapper: JsonMapper = JsonMapper.builder().addModule(KotlinModule.Builder().build()).build()
 
@@ -120,7 +128,92 @@ class McpToolsTest {
             "knowledge.reclassify_note",
             "knowledge.digest_transcript",
             "knowledge.list_audit",
+            "knowledge.review_summary",
         )
+    }
+
+    @Test
+    fun `review_summary forwards bounded request and projects governance buckets`() {
+        val request = slot<ReviewSummaryRequest>()
+        every { reviewService.summary(capture(request)) } returns
+            ReviewSummary(
+                generatedAt = Instant.parse("2026-06-04T16:00:00Z"),
+                inbox =
+                    ReviewBucket(
+                        total = 1,
+                        items =
+                            listOf(
+                                ReviewNote(
+                                    id = "01HXREVIEW0000000000000000",
+                                    type = "lesson",
+                                    scope = "_inbox",
+                                    source = "assistant-ui:auto-capture:s1",
+                                    capturedAt = Instant.parse("2026-06-04T15:00:00Z"),
+                                    confidence = 0.52,
+                                    title = "pending note",
+                                    vaultPath = "_inbox/2026-06-04/pending.md",
+                                    tags = setOf("auto-capture"),
+                                    recallCount = 4,
+                                    lastRecalledAt = Instant.parse("2026-06-04T15:30:00Z"),
+                                ),
+                            ),
+                    ),
+                needsReview = ReviewBucket(total = 0, items = emptyList()),
+                recentAutoCaptures = ReviewBucket(total = 0, items = emptyList()),
+                staleUnusedNotes = ReviewBucket(total = 0, items = emptyList()),
+                lowConfidenceHighRecall = ReviewBucket(total = 0, items = emptyList()),
+                tagCandidateClusters = ReviewBucket(total = 0, items = emptyList()),
+                recentAudit = ReviewBucket(total = 0, items = emptyList()),
+                suggestions =
+                    listOf(
+                        ReviewSuggestion(
+                            kind = "needs_review",
+                            severity = "high",
+                            message = "review pending memory",
+                            suggestedTool = "knowledge.reclassify_note",
+                            targetId = "01HXREVIEW0000000000000000",
+                            targetKind = "note",
+                            details = mapOf("total" to 1),
+                        ),
+                    ),
+            )
+
+        val out =
+            tools.call(
+                "knowledge.review_summary",
+                mapper.readTree(
+                    """
+                    {
+                      "limit": 5,
+                      "stale_days": 30,
+                      "low_confidence_max": 0.5,
+                      "high_recall_min": 2,
+                      "tag_threshold": 0.9
+                    }
+                    """.trimIndent(),
+                ),
+            )!!
+
+        assertThat(request.captured.limit).isEqualTo(5)
+        assertThat(request.captured.staleDays).isEqualTo(30)
+        assertThat(request.captured.lowConfidenceMax).isEqualTo(0.5)
+        assertThat(request.captured.highRecallMin).isEqualTo(2)
+        assertThat(request.captured.tagThreshold).isEqualTo(0.9)
+
+        @Suppress("UNCHECKED_CAST")
+        val summary = out["summary"] as Map<String, Any?>
+        assertThat(summary["generated_at"]).isEqualTo("2026-06-04T16:00:00Z")
+        @Suppress("UNCHECKED_CAST")
+        val inbox = summary["inbox"] as Map<String, Any?>
+        assertThat(inbox["total"]).isEqualTo(1)
+        @Suppress("UNCHECKED_CAST")
+        val inboxItems = inbox["items"] as List<Map<String, Any?>>
+        assertThat(inboxItems[0]["source"]).isEqualTo("assistant-ui:auto-capture:s1")
+        assertThat(inboxItems[0]["recall_count"]).isEqualTo(4)
+        assertThat(inboxItems[0]["last_recalled_at"]).isEqualTo("2026-06-04T15:30:00Z")
+        @Suppress("UNCHECKED_CAST")
+        val suggestions = summary["suggestions"] as List<Map<String, Any?>>
+        assertThat(suggestions[0]["suggested_tool"]).isEqualTo("knowledge.reclassify_note")
     }
 
     @Test
