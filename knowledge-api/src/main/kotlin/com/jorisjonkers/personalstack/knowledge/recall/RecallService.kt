@@ -20,8 +20,8 @@ import org.springframework.stereotype.Service
  *  - [RecallMode.HYBRID] = FTS + pgvector ANN, RRF-fused. Falls back
  *    to FTS-only when the query embedder fails (so a cold Ollama or
  *    a model swap doesn't break recall).
- *  - [RecallMode.DEEP] = HYBRID today; LightRAG mix + listwise rerank
- *    plug in here in a follow-up PR.
+ *  - [RecallMode.DEEP] = HYBRID + listwise rerank. LightRAG mix graph
+ *    retrieval plugs in here in a follow-up PR.
  *
  * Every recall call emits a Micrometer Observation with attributes
  * the read-side Grafana panel keys on. Failure of the vector leg is

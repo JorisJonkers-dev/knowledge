@@ -7,8 +7,10 @@ Exposes an HTTP Streamable JSON-RPC MCP endpoint at
 `kb_notes`, and publish a job to the `knowledge` RabbitMQ topic
 exchange for the Python ingest worker. Read tools (`recall`,
 `list_recent`, `get_note`, `find_conflicts`) query the same tables
-via jOOQ — today Postgres FTS, a pgvector ANN leg lands in a
-follow-up.
+via jOOQ. Recall supports `fast` Postgres FTS, `hybrid` FTS +
+pgvector RRF, and `deep` hybrid + reranker. The curator also publishes
+promoted notes to the in-cluster LightRAG service so graph/vector
+retrieval can be added without changing capture flow.
 
 ## Claude Code integration — workstation setup
 
@@ -77,24 +79,47 @@ without holding an SSO cookie.
    in `~/.claude.json`, one for the hooks. Rotation means editing
    both.
 
-### Dotfiles installed by Phase 6
+### Dotfiles installed by the bootstrap
 
-These live under `~/.claude/` on the workstation, NOT in this repo
-(they are user-scope and survive across every Claude Code session,
-not just personal-stack-2).
+The bootstrap writes user-scope copies under `~/.claude/` on the
+workstation so they survive across every Claude Code session, not just
+this checkout. Project-scoped mirrors can also live in this repo for
+agents that load repository skills directly.
 
-- `~/.claude/skills/recall/SKILL.md` — wraps the `recall` MCP tool;
-  Claude Code surfaces it proactively when relevant queries come up.
-- `~/.claude/skills/lesson/SKILL.md` — wraps `capture_lesson`.
-- `~/.claude/skills/decision/SKILL.md` — wraps `capture_decision`.
-- `~/.claude/hooks/session-start-recall.sh` — prepends recent
-  project-scoped notes to every new session's preamble.
-- `~/.claude/hooks/stop-digest.sh` — async-uploads modified
-  auto-memory files (`~/.claude/projects/<encoded>/memory/*.md`)
-  via `ingest_note` so future sessions in other projects can recall
-  them.
-- `~/.claude/settings.json` — `hooks.SessionStart` + `hooks.Stop`
-  entries pointing at the two scripts.
+Claude/Codex parity is mandatory for project agent features. The
+checked-in `.codex/hooks.json` + `.codex/hooks/*` prompt-recall and
+stop-digest hooks are mirrored by `.claude/settings.json` +
+`.claude/hooks/*`; future agent skills or hooks should keep both sides
+aligned.
+
+- `~/.claude/skills/topics/SKILL.md` — inspect the closed topic/tag
+  vocabulary before scoping captures.
+- `~/.claude/skills/audit/SKILL.md` — audit inbox backlog, duplicate
+  tags, and thin/duplicate topics.
+- `~/.claude/skills/kb-first/SKILL.md` — consult and update the KB with
+  bounded recall/capture.
+- `~/.claude/skills/token-economy/SKILL.md` — keep hooks, skills, and
+  output summaries token-efficient.
+- `~/.claude/skills/agent-session-bootstrap/SKILL.md` — set up future
+  Claude/Codex sessions with KB recall/capture defaults.
+- `~/.claude/hooks/user-prompt-submit-recall.sh` — injects up to 3
+  `knowledge.recall(mode=hybrid)` snippets for non-trivial prompts.
+- `~/.claude/hooks/pre-tool-use-edit-recall.sh` — runs a deduped
+  path/module recall before edits and skips secrets-bearing paths.
+- `~/.claude/hooks/pre-tool-use-git-commit-capture.sh` — captures
+  non-WIP commit messages as project-scoped decisions.
+- `~/.claude/hooks/stop-session-digest.sh` — sends a capped transcript
+  tail to `knowledge.digest_transcript` and captures at most 5 reusable
+  lessons per session by default.
+- `~/.claude/settings.json` — hook registrations pointing at those
+  scripts. The installer prints the JSON because it does not rewrite
+  existing settings automatically.
+
+Cost controls: `KB_RECALL_HOOK_LIMIT`, `KB_RECALL_HOOK_MODE`,
+`KB_RECALL_MIN_PROMPT_CHARS`, `KB_DIGEST_MAX_CHARS`, and
+`KB_DIGEST_MAX_CAPTURES` tune hook behavior.
+`KB_DIGEST_DEDUPE_SCORE` sets the auto-capture duplicate cutoff.
+`KB_AUTO_MCP_DISABLED=1` turns every hook into a no-op.
 
 ### Sanity check
 

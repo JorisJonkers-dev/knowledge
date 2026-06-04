@@ -89,6 +89,9 @@ managed_paths=(
   "${HOOKS_DIR}/stop-session-digest.sh"
   "${SKILLS_DIR}/topics/SKILL.md"
   "${SKILLS_DIR}/audit/SKILL.md"
+  "${SKILLS_DIR}/kb-first/SKILL.md"
+  "${SKILLS_DIR}/token-economy/SKILL.md"
+  "${SKILLS_DIR}/agent-session-bootstrap/SKILL.md"
   "${ALLOWLIST}"
 )
 
@@ -108,34 +111,44 @@ fi
 read -r -d '' USER_PROMPT_SUBMIT_HOOK <<'HOOK' || true
 #!/usr/bin/env bash
 # UserPromptSubmit hook — calls knowledge.recall with the user's
-# prompt content before the agent sees it. Top-3 hits are injected
-# as a <context> block so the agent has prior captures in hand.
+# prompt content before the agent sees it. A tiny bounded hit list is
+# injected so the agent has prior captures in hand without a KB dump.
 #
 # Silent on failure; the KB being unreachable should not block
 # typing into Claude Code.
 
 set -u
 
+[ "${KB_AUTO_MCP_DISABLED:-0}" = 1 ] && exit 0
 if [ -z "${KB_BEARER_TOKEN:-}" ]; then exit 0; fi
 
 KB_URL="${KB_URL:-@KB_URL@}"
+case "${KB_URL}" in
+  */mcp) KB_MCP_URL="${KB_URL}" ;;
+  *) KB_MCP_URL="${KB_URL%/}/mcp" ;;
+esac
 
 # Stdin carries the JSON event payload; the user_prompt field has the
 # raw text. Use python (always present on macOS / NixOS) to extract.
 prompt="$(python3 -c 'import json,sys; data=json.load(sys.stdin); print(data.get("user_prompt") or data.get("prompt") or "", end="")' 2>/dev/null || true)"
 
 # Skip trivially-short prompts — overhead > value.
-[ "${#prompt}" -lt 20 ] && exit 0
+[ "${#prompt}" -lt "${KB_RECALL_MIN_PROMPT_CHARS:-40}" ] && exit 0
+
+mode="${KB_RECALL_HOOK_MODE:-hybrid}"
+limit="${KB_RECALL_HOOK_LIMIT:-3}"
 
 payload=$(python3 -c 'import json,sys; print(json.dumps({
   "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
-    "name":"knowledge.recall","arguments":{"query":sys.argv[1],"limit":3}}}))' "${prompt}")
+    "name":"knowledge.recall",
+    "arguments":{"query":sys.argv[1],"limit":int(sys.argv[2]),"mode":sys.argv[3]}}}))' \
+  "${prompt}" "${limit}" "${mode}")
 
 response=$(curl -sS --connect-timeout 3 --max-time 5 \
   -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -d "${payload}" \
-  "${KB_URL}" 2>/dev/null) || exit 0
+  "${KB_MCP_URL}" 2>/dev/null) || exit 0
 
 hits=$(printf '%s' "${response}" | python3 -c 'import json,sys
 try:
@@ -224,6 +237,121 @@ SKILL
 write_file "${SKILLS_DIR}/audit/SKILL.md" 0644 "${AUDIT_SKILL}"
 
 # -----------------------------------------------------------------
+# Skill: kb-first
+# -----------------------------------------------------------------
+read -r -d '' KB_FIRST_SKILL <<'SKILL' || true
+---
+name: kb-first
+description: Use before designing or changing behavior that may depend on prior knowledge-base captures, repo history, architecture decisions, cluster state, agent conventions, or remembered lessons. Also use near task completion to capture durable lessons or decisions without dumping large KB context.
+---
+
+# KB First
+
+Use the KB as a small retrieval layer, not as a large context dump.
+
+1. Distill the task into a short recall query: nouns, service names,
+   file names, and the decision being made.
+2. Call `knowledge.recall` with `limit <= 5`. Prefer
+   `scope=project:personal-stack` for repo behavior, `topic:<slug>`
+   for general framework/tool facts, or omit scope for the curated
+   default.
+3. Use `mode=hybrid` for normal work. Use `mode=fast` for trivial
+   lookup or when latency matters more than semantic matching. Use
+   `mode=deep` only when fast or hybrid misses something important.
+4. Read only what is needed. Usually snippets are enough. If a hit
+   matters, call `knowledge.relations(id, depth=1)` before fetching
+   the full note.
+5. If the KB has no useful context, continue from repo/source
+   inspection and say the KB had no relevant hits.
+
+Capture at the end only when the information is durable and reusable:
+implementation pitfalls, verified behavior, operational runbooks,
+architecture/process choices, or ambiguity that needs operator judgment.
+Keep captures compact. Do not capture secrets, raw logs, full diffs, or
+entire transcripts.
+
+Never run broad `scope=all` recall as a first step. Use it only after
+targeted recall fails and the task genuinely needs cross-scope context.
+SKILL
+
+write_file "${SKILLS_DIR}/kb-first/SKILL.md" 0644 "${KB_FIRST_SKILL}"
+
+# -----------------------------------------------------------------
+# Skill: token-economy
+# -----------------------------------------------------------------
+read -r -d '' TOKEN_ECONOMY_SKILL <<'SKILL' || true
+---
+name: token-economy
+description: Use when the user asks to reduce token usage, agent cost, context bloat, prompt-caching misses, RAG/LightRAG behavior, memory policies, or durable instructions. Also use when installing many skills or designing automatic KB recall so retrieval stays bounded.
+---
+
+# Token Economy
+
+- Keep stable instructions in `CLAUDE.md` or skills; keep volatile facts
+  in the KB and retrieve them on demand.
+- Prefer progressive disclosure: list/search first, open small file
+  ranges next, fetch full files or notes only when needed.
+- Keep recall bounded: default to `limit=3` for hook-injected context and
+  `limit <= 5` for manual task setup.
+- Use hybrid retrieval for normal KB recall. Escalate to deep retrieval
+  only after a miss, ambiguity, or non-obvious cross-topic dependency.
+- Do not install or enable low-fit skills just to grow the list. Skill
+  metadata itself consumes prompt budget and very large skill sets can
+  hide useful skills.
+- Preserve prompt-cache-friendly ordering when writing durable
+  instructions: stable policy first, dynamic task-specific context later.
+
+When reporting command results, summarize only the lines needed to
+support the decision. Session digests should capture only reusable
+lessons above a confidence floor and should dedupe against existing KB
+hits before writing.
+SKILL
+
+write_file "${SKILLS_DIR}/token-economy/SKILL.md" 0644 "${TOKEN_ECONOMY_SKILL}"
+
+# -----------------------------------------------------------------
+# Skill: agent-session-bootstrap
+# -----------------------------------------------------------------
+read -r -d '' AGENT_SESSION_BOOTSTRAP_SKILL <<'SKILL' || true
+---
+name: agent-session-bootstrap
+description: Use when configuring Claude Code or Codex sessions, hooks, skills, MCP servers, durable instructions, agent runners, or future-session defaults. Ensures KB recall/capture and token-efficient behavior are installed without relying on user reminders.
+---
+
+# Agent Session Bootstrap
+
+Checklist:
+
+1. Locate the active user and project config layers:
+   `~/.claude/settings.json`, `~/.claude/CLAUDE.md`, project
+   `CLAUDE.md`, project `.claude/settings.json`, project `.claude/hooks`,
+   `~/.claude/skills`, Codex `~/.codex/config.toml`, `~/.codex/hooks.json`,
+   repo `AGENTS.md`, and `.agents/skills`.
+2. Ensure the `knowledge` MCP server is configured and uses
+   `KB_BEARER_TOKEN` rather than an inline secret where possible.
+3. Register bounded recall hooks:
+   `UserPromptSubmit` with `limit=3`/`mode=hybrid`,
+   `PreToolUse` edit recall deduped per session, and `Stop` transcript
+   digest with a per-session capture cap.
+4. Keep hooks silent on KB failure and add `KB_AUTO_MCP_DISABLED=1` as
+   a panic switch.
+5. Add or update memory files so future sessions know to consult and
+   update the KB without user reminders.
+6. Validate with dry-run hook payloads and at least one `tools/list` or
+   `knowledge.recall` MCP call.
+
+Every Codex project skill, hook, or durable instruction must have an
+equivalent Claude implementation in the same branch. Treat Codex-only
+`.agents`/`.codex` files as incomplete until `.claude`/`CLAUDE.md`/
+installer parity exists.
+
+Do not put bearer tokens, secrets, or full transcripts into committed
+files.
+SKILL
+
+write_file "${SKILLS_DIR}/agent-session-bootstrap/SKILL.md" 0644 "${AGENT_SESSION_BOOTSTRAP_SKILL}"
+
+# -----------------------------------------------------------------
 # Path allowlist (gitignore-style). Hooks below skip any tool input
 # whose target matches a pattern here. Defaults exclude paths that
 # typically carry secrets so an Edit on `.env` does not exfiltrate
@@ -295,6 +423,10 @@ set -u
 [ -z "${KB_BEARER_TOKEN:-}" ] && exit 0
 
 KB_URL="${KB_URL:-@KB_URL@}"
+case "${KB_URL}" in
+  */mcp) KB_MCP_URL="${KB_URL}" ;;
+  *) KB_MCP_URL="${KB_URL%/}/mcp" ;;
+esac
 STATE_DIR="${HOME}/.claude/state"
 ALLOWLIST="${HOME}/.claude/.knowledge-system-allowlist"
 
@@ -341,16 +473,20 @@ marker="${STATE_DIR}/sessions/${session}/edit-$(printf '%s' "${file_path}" | sha
 basename=$(basename "${file_path}")
 parent=$(basename "$(dirname "${file_path}")")
 query="${basename} ${parent}"
+mode="${KB_RECALL_HOOK_MODE:-hybrid}"
+limit="${KB_RECALL_EDIT_LIMIT:-2}"
 
 payload=$(python3 -c 'import json,sys; print(json.dumps({
   "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
-    "name":"knowledge.recall","arguments":{"query":sys.argv[1],"limit":2}}}))' "${query}")
+    "name":"knowledge.recall",
+    "arguments":{"query":sys.argv[1],"limit":int(sys.argv[2]),"mode":sys.argv[3]}}}))' \
+  "${query}" "${limit}" "${mode}")
 
 response=$(curl -sS --connect-timeout 3 --max-time 5 \
   -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -d "${payload}" \
-  "${KB_URL}/mcp" 2>/dev/null) || exit 0
+  "${KB_MCP_URL}" 2>/dev/null) || exit 0
 
 printf '%s' "${response}" | python3 -c '
 import json, sys
@@ -388,6 +524,10 @@ set -u
 [ -z "${KB_BEARER_TOKEN:-}" ] && exit 0
 
 KB_URL="${KB_URL:-@KB_URL@}"
+case "${KB_URL}" in
+  */mcp) KB_MCP_URL="${KB_URL}" ;;
+  *) KB_MCP_URL="${KB_URL%/}/mcp" ;;
+esac
 
 input=$(cat 2>/dev/null || true)
 read -r tool command < <(printf '%s' "${input}" | python3 -c '
@@ -447,7 +587,7 @@ curl -sS --connect-timeout 3 --max-time 5 \
   -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -d "${payload}" \
-  "${KB_URL}/mcp" >/dev/null 2>&1 || true
+  "${KB_MCP_URL}" >/dev/null 2>&1 || true
 HOOK
 
 write_file "${HOOKS_DIR}/pre-tool-use-git-commit-capture.sh" 0755 "${PRE_TOOL_USE_GIT_COMMIT_HOOK}"
@@ -475,6 +615,10 @@ set -u
 [ -z "${KB_BEARER_TOKEN:-}" ] && exit 0
 
 KB_URL="${KB_URL:-@KB_URL@}"
+case "${KB_URL}" in
+  */mcp) KB_MCP_URL="${KB_URL}" ;;
+  *) KB_MCP_URL="${KB_URL%/}/mcp" ;;
+esac
 STATE_DIR="${HOME}/.claude/state"
 LOG="${STATE_DIR}/auto-mcp.log"
 mkdir -p "${STATE_DIR}"
@@ -488,14 +632,14 @@ try:
 except Exception:
     print("unknown")' 2>/dev/null)
 
-# Per-session token bucket: max 5 auto-captures per session.
+# Per-session token bucket: max 5 auto-captures per session by default.
 session_dir="${STATE_DIR}/sessions/${session}"
 mkdir -p "${session_dir}"
 remaining_file="${session_dir}/digest-budget"
 if [ -e "${remaining_file}" ]; then
   remaining=$(cat "${remaining_file}")
 else
-  remaining=5
+  remaining="${KB_DIGEST_MAX_CAPTURES:-5}"
 fi
 
 # Load the transcript text. Claude Code stores it as JSONL; the
@@ -505,8 +649,9 @@ if [ -z "${transcript_path}" ] || [ ! -r "${transcript_path}" ]; then
   exit 0
 fi
 transcript=$(python3 -c '
-import json, sys
+import json, os, sys
 out = []
+max_chars = int(os.environ.get("KB_DIGEST_MAX_CHARS", "60000"))
 with open(sys.argv[1]) as f:
     for line in f:
         line = line.strip()
@@ -520,7 +665,8 @@ with open(sys.argv[1]) as f:
             out.append(f"[{role}] {content}")
         except Exception:
             pass
-print("\n".join(out))' "${transcript_path}" 2>/dev/null) || exit 0
+joined = "\n".join(out)
+print(joined[-max_chars:])' "${transcript_path}" 2>/dev/null) || exit 0
 
 [ -z "${transcript}" ] && exit 0
 
@@ -535,7 +681,7 @@ response=$(curl -sS --connect-timeout 5 --max-time 60 \
   -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
   -H "Content-Type: application/json" \
   -d "${payload}" \
-  "${KB_URL}/mcp" 2>/dev/null) || exit 0
+  "${KB_MCP_URL}" 2>/dev/null) || exit 0
 
 candidates=$(printf '%s' "${response}" | python3 -c '
 import json, sys
@@ -556,6 +702,26 @@ while IFS= read -r line; do
   body=$(printf '%s' "${line}" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["body"], end="")')
   topic=$(printf '%s' "${line}" | python3 -c 'import json,sys; print((json.loads(sys.stdin.read()).get("suggested_topic") or ""), end="")')
   tags_json=$(printf '%s' "${line}" | python3 -c 'import json,sys; print(json.dumps(json.loads(sys.stdin.read()).get("suggested_tags") or []), end="")')
+  [ -n "${title}" ] && [ -n "${body}" ] || continue
+
+  dedupe_payload=$(python3 -c 'import json,sys; print(json.dumps({
+    "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+      "name":"knowledge.recall","arguments":{
+        "query": sys.argv[1], "limit": 1, "mode": "hybrid"}}}))' "${title} ${body}")
+  duplicate_count=$(curl -sS --connect-timeout 3 --max-time 5 \
+    -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "${dedupe_payload}" \
+    "${KB_MCP_URL}" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    hits = json.load(sys.stdin)["result"]["structuredContent"]["hits"]
+    print(1 if hits and float(hits[0].get("score", 0)) >= float("'${KB_DIGEST_DEDUPE_SCORE:-0.86}'") else 0)
+except Exception:
+    print(0)
+' 2>/dev/null || echo 0)
+  [ "${duplicate_count}" = 1 ] && continue
+
   scope_arg=""
   [ -n "${topic}" ] && scope_arg="topic:${topic}"
   capture_payload=$(python3 -c 'import json,sys; print(json.dumps({
@@ -571,7 +737,7 @@ while IFS= read -r line; do
     -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "${capture_payload}" \
-    "${KB_URL}/mcp" >/dev/null 2>&1 || continue
+    "${KB_MCP_URL}" >/dev/null 2>&1 || continue
   remaining=$((remaining - 1))
   emitted=$((emitted + 1))
   echo "$(date -u +%FT%TZ) stop-digest emit session=${session} title=${title}" >>"${LOG}" 2>/dev/null

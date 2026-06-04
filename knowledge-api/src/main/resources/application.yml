@@ -106,10 +106,11 @@ springdoc:
 
 knowledge:
   recall:
-    # Default mode for `knowledge.recall`. `fast` = FTS-only (Phase 4c-2
-    # baseline), `hybrid` = FTS + pgvector + RRF fusion. Stays `fast`
-    # until the curator has finished embedding the existing corpus —
-    # see [[knowledge-system-retrieval-architecture-design-proposal]].
+    # Default mode for `knowledge.recall`. `fast` = FTS-only, `hybrid`
+    # = FTS + pgvector + RRF fusion, `deep` = hybrid + reranker.
+    # Local/dev stays fast by default; production sets
+    # KB_RECALL_DEFAULT_MODE=hybrid so agent hooks get semantic recall
+    # without each session having to request it explicitly.
     default-mode: ${KB_RECALL_DEFAULT_MODE:fast}
     # Reciprocal-rank-fusion constant. Literature default; raising it
     # damps lower-ranked hits more aggressively. Don't touch without

@@ -66,5 +66,12 @@ class InstallerControllerIntegrationTest : IntegrationTestBase() {
         assertThat(body).contains("user-prompt-submit-recall.sh")
         assertThat(body).contains("topics/SKILL.md")
         assertThat(body).contains("audit/SKILL.md")
+        assertThat(body).contains("kb-first/SKILL.md")
+        assertThat(body).contains("token-economy/SKILL.md")
+        assertThat(body).contains("agent-session-bootstrap/SKILL.md")
+        assertThat(body).contains("KB_RECALL_HOOK_MODE")
+        assertThat(body).contains("KB_DIGEST_MAX_CHARS")
+        assertThat(body).contains("KB_DIGEST_DEDUPE_SCORE")
+        assertThat(body).contains("KB_MCP_URL")
     }
 }
