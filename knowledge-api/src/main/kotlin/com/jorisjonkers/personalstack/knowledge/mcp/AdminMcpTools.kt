@@ -23,6 +23,7 @@ import tools.jackson.databind.JsonNode
  *   - `knowledge.merge_topics`   — UPDATE `kb_notes.scope` from one slug
  *                                  to another, soft-deactivate the source.
  *   - `knowledge.rename_tag`     — UPDATE `kb_note_tags.tag` everywhere.
+ *   - `knowledge.merge_tags`     — fold multiple source tags into one survivor.
  *
  * Each tool is split into a descriptor + a handler so the per-method
  * length stays inside detekt's threshold (matches the
@@ -30,7 +31,10 @@ import tools.jackson.databind.JsonNode
  * verbose — the MCP `tools/list` payload is the agent-facing API,
  * and the description text is part of that contract.
  */
-@Suppress("TooManyFunctions") // Admin tool surface lives here by design — one descriptor + handler per tool.
+@Suppress(
+    "TooManyFunctions",
+    "LargeClass",
+) // Admin tool surface lives here by design — one descriptor + handler per tool.
 @Component
 class AdminMcpTools(
     private val topicRepository: TopicRepository,
@@ -196,12 +200,26 @@ class AdminMcpTools(
         val toTag = JsonArguments.requireString(args, "to")
         if (fromTag == toTag) throw IllegalStateException("rename_tag: from and to must differ")
         val touched = topicRepository.renameTag(fromTag, toTag)
-        return mapOf(
-            "from" to fromTag,
-            "to" to toTag,
-            "rows_touched" to touched,
-            "actor" to actor,
-        )
+        val auditId =
+            if (touched > 0) {
+                auditRepository
+                    .record(
+                        actor = actor,
+                        action = "rename_tag",
+                        targetKind = "tag",
+                        beforeJson = renameTagBeforePayload(fromTag),
+                        afterJson = renameTagAfterPayload(toTag, touched),
+                    ).id
+            } else {
+                null
+            }
+        return buildMap {
+            put("from", fromTag)
+            put("to", toTag)
+            put("rows_touched", touched)
+            put("actor", actor)
+            if (auditId != null) put("audit_id", auditId)
+        }
     }
 
     // -------- merge_tags --------
@@ -243,13 +261,8 @@ class AdminMcpTools(
             result.rowsDeletedAsDupes,
             actor,
         )
-        return mapOf(
-            "from" to fromTags,
-            "into" to intoTag,
-            "rows_renamed" to result.rowsRenamed,
-            "rows_dropped_as_dupes" to result.rowsDeletedAsDupes,
-            "actor" to actor,
-        )
+        val auditId = recordMergeTagsAudit(actor, fromTags, intoTag, result)
+        return projectMergeTagsResult(fromTags, intoTag, result, actor, auditId)
     }
 
     // -------- reclassify_note --------
@@ -322,6 +335,58 @@ class AdminMcpTools(
             "{}"
         }
 
+    private fun renameTagBeforePayload(fromTag: String): String = """{"tag":${jsonStringLiteral(fromTag)}}"""
+
+    private fun renameTagAfterPayload(
+        toTag: String,
+        rowsTouched: Int,
+    ): String = """{"tag":${jsonStringLiteral(toTag)},"rows_touched":$rowsTouched}"""
+
+    private fun mergeTagsBeforePayload(fromTags: List<String>): String = """{"from":${jsonStringArray(fromTags)}}"""
+
+    private fun recordMergeTagsAudit(
+        actor: String,
+        fromTags: List<String>,
+        intoTag: String,
+        result: TopicRepository.MergeTagsResult,
+    ): String? {
+        if (result.rowsRenamed + result.rowsDeletedAsDupes == 0) return null
+        return auditRepository
+            .record(
+                actor = actor,
+                action = "merge_tags",
+                targetKind = "tag",
+                beforeJson = mergeTagsBeforePayload(fromTags),
+                afterJson = mergeTagsAfterPayload(intoTag, result),
+            ).id
+    }
+
+    private fun projectMergeTagsResult(
+        fromTags: List<String>,
+        intoTag: String,
+        result: TopicRepository.MergeTagsResult,
+        actor: String,
+        auditId: String?,
+    ): Map<String, Any?> =
+        buildMap {
+            put("from", fromTags)
+            put("into", intoTag)
+            put("rows_renamed", result.rowsRenamed)
+            put("rows_dropped_as_dupes", result.rowsDeletedAsDupes)
+            put("actor", actor)
+            if (auditId != null) put("audit_id", auditId)
+        }
+
+    private fun mergeTagsAfterPayload(
+        intoTag: String,
+        result: TopicRepository.MergeTagsResult,
+    ): String =
+        listOf(
+            """"into":${jsonStringLiteral(intoTag)}""",
+            """"rows_renamed":${result.rowsRenamed}""",
+            """"rows_dropped_as_dupes":${result.rowsDeletedAsDupes}""",
+        ).joinToString(separator = ",", prefix = "{", postfix = "}")
+
     /**
      * Minimal JSON-string encoder for the audit `afterJson` payload.
      * The guidance arrives as untrusted operator text, so quotes /
@@ -339,6 +404,9 @@ class AdminMcpTools(
                 .replace("\t", "\\t")
         return "\"$escaped\""
     }
+
+    private fun jsonStringArray(values: List<String>): String =
+        values.joinToString(separator = ",", prefix = "[", postfix = "]") { jsonStringLiteral(it) }
 
     // -------- shared projection --------
 

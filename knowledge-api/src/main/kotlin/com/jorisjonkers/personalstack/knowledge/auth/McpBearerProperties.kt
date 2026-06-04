@@ -19,8 +19,8 @@ data class McpBearerProperties(
     /**
      * Token names from [tokens] that are also allowed to call the
      * admin-gated MCP tools (`add_topic`, `update_topic`,
-     * `merge_topics`, `rename_tag`). Listed by name, not by secret
-     * value, so the same Vault projection drives both: the secret
+     * `merge_topics`, `rename_tag`, `merge_tags`). Listed by name,
+     * not by secret value, so the same Vault projection drives both: the secret
      * stays in `tokens`, the privilege escalation is just a string
      * comparison. Default empty — admin tools are inert until an
      * operator opts a token in.

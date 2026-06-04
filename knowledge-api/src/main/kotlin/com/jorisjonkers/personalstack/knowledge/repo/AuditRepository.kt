@@ -16,10 +16,9 @@ import java.time.ZoneOffset
  * `<since>`?").
  *
  * The read path is what backs the `knowledge.list_audit` MCP tool.
- * The write path is consumed by future curator passes (Plan A
- * renormaliser, Plan B reclassifier) and by the topic / tag admin
- * MCP tools — currently those emit structured logs only; flipping
- * them to call `record(...)` is a one-line change per call site.
+ * The write path is consumed by curator passes (Plan A renormaliser,
+ * Plan B reclassifier) and by the topic / tag admin MCP tools when
+ * they need operator-visible mutation history.
  */
 @Repository
 class AuditRepository(

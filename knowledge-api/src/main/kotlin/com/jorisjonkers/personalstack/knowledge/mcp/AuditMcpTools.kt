@@ -32,7 +32,7 @@ class AuditMcpTools(
                     "is populated by curator retroactive passes (relation " +
                     "resolver, title renormaliser, reclassifier) and by " +
                     "admin MCP writes (`add_topic` / `update_topic` / " +
-                    "`merge_topics` / `rename_tag`). Filters compose: " +
+                    "`merge_topics` / `rename_tag` / `merge_tags`). Filters compose: " +
                     "any combination of `actor` / `action` / `target_id` " +
                     "narrows the result set; `since` is an ISO-8601 " +
                     "timestamp clamping the window.",

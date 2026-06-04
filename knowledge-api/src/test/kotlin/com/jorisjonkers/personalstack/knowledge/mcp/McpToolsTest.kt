@@ -78,6 +78,18 @@ class McpToolsTest {
             vaultCommit = null,
         )
 
+    private fun auditRow(id: String = "01HXAUD0000000000000000000") =
+        KbAuditRow(
+            id = id,
+            actor = "mcp:admin",
+            action = "merge_tags",
+            targetId = null,
+            targetKind = "tag",
+            beforeJson = null,
+            afterJson = null,
+            at = Instant.parse("2026-05-19T13:00:00Z"),
+        )
+
     @Test
     fun `describe advertises capture, read, discovery, admin, digest, and audit tools by name`() {
         val names = tools.describe().map { it["name"] as String }
@@ -176,6 +188,8 @@ class McpToolsTest {
         every { adminAuthorization.requireAdmin() } returns "mcp:admin"
         every { topicRepository.mergeTags(listOf("kt", "kts"), "kotlin") } returns
             TopicRepository.MergeTagsResult(rowsRenamed = 2, rowsDeletedAsDupes = 1)
+        every { auditRepository.record(any(), any(), any(), any(), any(), any(), any()) } returns
+            auditRow(id = "01HXAUDMERGETAGS0000000000")
 
         val out =
             tools.call(
@@ -188,7 +202,63 @@ class McpToolsTest {
         assertThat(out["rows_renamed"]).isEqualTo(2)
         assertThat(out["rows_dropped_as_dupes"]).isEqualTo(1)
         assertThat(out["actor"]).isEqualTo("mcp:admin")
+        assertThat(out["audit_id"]).isEqualTo("01HXAUDMERGETAGS0000000000")
         verify(exactly = 1) { topicRepository.mergeTags(listOf("kt", "kts"), "kotlin") }
+        verify(exactly = 1) {
+            auditRepository.record(
+                actor = "mcp:admin",
+                action = "merge_tags",
+                targetId = null,
+                targetKind = "tag",
+                beforeJson = """{"from":["kt","kts"]}""",
+                afterJson = """{"into":"kotlin","rows_renamed":2,"rows_dropped_as_dupes":1}""",
+                now = any(),
+            )
+        }
+    }
+
+    @Test
+    fun `merge_tags skips audit rows when the merge is an idempotent no-op`() {
+        every { adminAuthorization.requireAdmin() } returns "mcp:admin"
+        every { topicRepository.mergeTags(listOf("kt"), "kotlin") } returns
+            TopicRepository.MergeTagsResult(rowsRenamed = 0, rowsDeletedAsDupes = 0)
+
+        val out =
+            tools.call(
+                "knowledge.merge_tags",
+                mapper.readTree("""{"from":["kt"],"into":"kotlin"}"""),
+            )!!
+
+        assertThat(out).doesNotContainKey("audit_id")
+        verify(exactly = 0) { auditRepository.record(any(), any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `rename_tag writes an audit row when rows are touched`() {
+        every { adminAuthorization.requireAdmin() } returns "mcp:admin"
+        every { topicRepository.renameTag("kt", "kotlin") } returns 2
+        every { auditRepository.record(any(), any(), any(), any(), any(), any(), any()) } returns
+            auditRow(id = "01HXAUDRENAMETAG000000000")
+
+        val out =
+            tools.call(
+                "knowledge.rename_tag",
+                mapper.readTree("""{"from":"kt","to":"kotlin"}"""),
+            )!!
+
+        assertThat(out["rows_touched"]).isEqualTo(2)
+        assertThat(out["audit_id"]).isEqualTo("01HXAUDRENAMETAG000000000")
+        verify(exactly = 1) {
+            auditRepository.record(
+                actor = "mcp:admin",
+                action = "rename_tag",
+                targetId = null,
+                targetKind = "tag",
+                beforeJson = """{"tag":"kt"}""",
+                afterJson = """{"tag":"kotlin","rows_touched":2}""",
+                now = any(),
+            )
+        }
     }
 
     @Test

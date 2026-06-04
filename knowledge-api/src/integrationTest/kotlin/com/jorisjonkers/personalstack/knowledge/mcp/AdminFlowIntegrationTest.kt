@@ -161,6 +161,15 @@ class AdminFlowIntegrationTest : IntegrationTestBase() {
         assertThat(structured["rows_touched"].asInt()).isEqualTo(2)
         assertThat(structured["from"].asText()).isEqualTo("kt")
         assertThat(structured["to"].asText()).isEqualTo("kotlin")
+
+        val auditRows = auditRows("rename_tag")
+        assertThat(auditRows.size()).isEqualTo(1)
+        val audit = auditRows[0]
+        assertThat(audit["id"].asText()).isEqualTo(structured["audit_id"].asText())
+        assertThat(audit["actor"].asText()).isEqualTo("mcp:admin")
+        assertThat(audit["target_kind"].asText()).isEqualTo("tag")
+        assertThat(audit["before_json"].asText()).isEqualTo("""{"tag":"kt"}""")
+        assertThat(audit["after_json"].asText()).isEqualTo("""{"tag":"kotlin","rows_touched":2}""")
     }
 
     @Test
@@ -200,6 +209,17 @@ class AdminFlowIntegrationTest : IntegrationTestBase() {
         val secondStructured = objectMapper.readTree(secondResponse)["result"]["structuredContent"]
         assertThat(secondStructured["rows_renamed"].asInt()).isEqualTo(0)
         assertThat(secondStructured["rows_dropped_as_dupes"].asInt()).isEqualTo(0)
+        assertThat(secondStructured.has("audit_id")).isFalse()
+
+        val auditRows = auditRows("merge_tags")
+        assertThat(auditRows.size()).isEqualTo(1)
+        val audit = auditRows[0]
+        assertThat(audit["id"].asText()).isEqualTo(structured["audit_id"].asText())
+        assertThat(audit["actor"].asText()).isEqualTo("mcp:admin")
+        assertThat(audit["target_kind"].asText()).isEqualTo("tag")
+        assertThat(audit["before_json"].asText()).isEqualTo("""{"from":["kt","kts"]}""")
+        assertThat(audit["after_json"].asText())
+            .isEqualTo("""{"into":"kotlin","rows_renamed":2,"rows_dropped_as_dupes":1}""")
     }
 
     private fun seedTopic(
@@ -251,4 +271,14 @@ class AdminFlowIntegrationTest : IntegrationTestBase() {
         assertThat(result.response.status).isEqualTo(200)
         return result.response.contentAsString
     }
+
+    private fun auditRows(action: String) =
+        objectMapper
+            .readTree(
+                callRaw(
+                    bearer = "admin-token",
+                    name = "knowledge.list_audit",
+                    args = mapOf("action" to action, "limit" to 10),
+                ),
+            )["result"]["structuredContent"]["rows"]
 }
