@@ -552,23 +552,29 @@ marker="${STATE_DIR}/sessions/${session}/edit-$(printf '%s' "${file_path}" | sha
 [ -e "${marker}" ] && exit 0
 : > "${marker}"
 
-# Query: filename basename + the parent dir, plenty for FTS recall.
+# Scope to the current repo and query by filename + parent + path; this
+# keeps automatic edit recall focused while still giving FTS enough terms.
+project="$(git remote get-url origin 2>/dev/null | sed -e 's#\.git$##' -e 's#.*[/:]##')"
+[ -n "${project}" ] || project="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
+scope="${KB_RECALL_SCOPE:-project:${project}}"
+
 basename=$(basename "${file_path}")
 parent=$(basename "$(dirname "${file_path}")")
-query="${basename} ${parent}"
+query="${basename} ${parent} ${file_path}"
 mode="${KB_RECALL_HOOK_MODE:-hybrid}"
 limit="${KB_RECALL_EDIT_LIMIT:-2}"
 
 recall_payload() {
-  python3 -c 'import json,sys; print(json.dumps({
-  "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
-    "name":"knowledge.recall",
-    "arguments":{"query":sys.argv[1],"limit":int(sys.argv[2]),"mode":sys.argv[3]}}}))' \
-    "$1" "$2" "$3"
+  python3 -c 'import json,sys
+args = {"query": sys.argv[1], "limit": int(sys.argv[2]), "mode": sys.argv[3]}
+if sys.argv[4]:
+    args["scope"] = sys.argv[4]
+print(json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"knowledge.recall","arguments":args}}))' \
+    "$1" "$2" "$3" "$4"
 }
 
 call_recall() {
-  payload=$(recall_payload "$1" "$2" "$3") || return 1
+  payload=$(recall_payload "$1" "$2" "$3" "$4") || return 1
   curl -sS --connect-timeout 3 --max-time 5 \
     -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
     -H "Content-Type: application/json" \
@@ -576,9 +582,9 @@ call_recall() {
     "${KB_MCP_URL}" 2>/dev/null
 }
 
-response=$(call_recall "${query}" "${limit}" "${mode}") || response=""
+response=$(call_recall "${query}" "${limit}" "${mode}" "${scope}") || response=""
 if [ -z "${response}" ] && [ "${mode}" != "fast" ]; then
-  response=$(call_recall "${query}" "${limit}" fast) || exit 0
+  response=$(call_recall "${query}" "${limit}" fast "${scope}") || exit 0
 fi
 [ -n "${response}" ] || exit 0
 
