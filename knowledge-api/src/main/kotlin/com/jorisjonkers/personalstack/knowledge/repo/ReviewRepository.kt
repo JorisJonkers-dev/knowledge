@@ -19,7 +19,10 @@ class ReviewRepository(
 ) {
     fun listInbox(limit: Int): ReviewBucket<ReviewNote> =
         listNotes(
-            condition = KB_NOTES.SCOPE.eq(INBOX_SCOPE),
+            condition =
+                KB_NOTES.SCOPE
+                    .eq(INBOX_SCOPE)
+                    .and(needsReviewPathCondition().not()),
             limit = limit,
             orderBy = listOf(KB_NOTES.ID.desc()),
         )
@@ -29,7 +32,7 @@ class ReviewRepository(
             condition =
                 KB_NOTES.SCOPE
                     .eq(INBOX_SCOPE)
-                    .and(KB_NOTES.VAULT_PATH.like("$NEEDS_REVIEW_PREFIX%")),
+                    .and(needsReviewPathCondition()),
             limit = limit,
             orderBy = listOf(KB_NOTES.ID.desc()),
         )
@@ -120,6 +123,15 @@ class ReviewRepository(
             .ne(INBOX_SCOPE)
             .and(KB_NOTES.SCOPE.ne(NEEDS_REVIEW_SCOPE))
 
+    private fun needsReviewPathCondition(): Condition =
+        KB_NOTES.VAULT_PATH.like("${likeLiteral(NEEDS_REVIEW_PREFIX)}%", LIKE_ESCAPE)
+
+    private fun likeLiteral(value: String): String =
+        value
+            .replace(LIKE_ESCAPE.toString(), "$LIKE_ESCAPE$LIKE_ESCAPE")
+            .replace("%", "$LIKE_ESCAPE%")
+            .replace("_", "${LIKE_ESCAPE}_")
+
     private fun KbNotesRecord.toReviewNote(tags: Set<String>): ReviewNote =
         ReviewNote(
             id = id ?: error("kb_notes row missing id"),
@@ -139,6 +151,7 @@ class ReviewRepository(
         const val INBOX_SCOPE = "_inbox"
         const val NEEDS_REVIEW_SCOPE = "_needs-review"
         const val NEEDS_REVIEW_PREFIX = "_inbox/_needs-review/"
+        const val LIKE_ESCAPE = '!'
         val AUTO_CAPTURE_TAGS = listOf("auto-capture", "auto-memory", "auto-digest")
     }
 }

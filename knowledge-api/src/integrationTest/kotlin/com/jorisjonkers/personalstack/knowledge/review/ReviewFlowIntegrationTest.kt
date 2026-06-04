@@ -56,7 +56,9 @@ class ReviewFlowIntegrationTest : IntegrationTestBase() {
 
     @Test
     fun `review_summary returns bounded governance buckets and advisory suggestions`() {
+        val inbox = seed("plain inbox", scope = "_inbox", vaultPath = "_inbox/2026-06-04/plain.md")
         val needsReview = seed("needs review", scope = "_inbox", vaultPath = "_inbox/_needs-review/note.md")
+        val wildcardLookalike = seed("wildcard lookalike", scope = "_inbox", vaultPath = "xinbox/xneeds-review/note.md")
         seed("recent auto", scope = "project:personal-stack", source = "assistant-ui:auto-capture:s1")
         seed(
             "stale old note",
@@ -85,9 +87,14 @@ class ReviewFlowIntegrationTest : IntegrationTestBase() {
             )
 
         val summary = out["summary"]
-        assertThat(summary["needs_review"]["total"].asInt()).isGreaterThanOrEqualTo(1)
+        assertThat(summary["needs_review"]["total"].asInt()).isEqualTo(1)
         val needsReviewIds = summary["needs_review"]["items"].map { it["id"].asText() }
         assertThat(needsReviewIds).contains(needsReview.id)
+        assertThat(needsReviewIds).doesNotContain(wildcardLookalike.id)
+        assertThat(summary["inbox"]["total"].asInt()).isEqualTo(2)
+        val inboxIds = summary["inbox"]["items"].map { it["id"].asText() }
+        assertThat(inboxIds).contains(inbox.id, wildcardLookalike.id)
+        assertThat(inboxIds).doesNotContain(needsReview.id)
 
         val autoSources = summary["recent_auto_captures"]["items"].map { it["source"].asText() }
         assertThat(autoSources).contains("assistant-ui:auto-capture:s1")
