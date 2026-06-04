@@ -112,6 +112,43 @@
           }
         ]
       }
+    },
+    {
+      "name": "stale agent kit install warning",
+      "query": "entrypoint warn knowledge-system agent kit manifest expected version run agents-kb-install",
+      "scope": "project:personal-stack",
+      "mode": "hybrid",
+      "limit": 3,
+      "maxRank": 3,
+      "expectedIds": ["EVAL-AGENT-KIT-STALE-INSTALL"],
+      "expectedTerms": ["knowledge-system-version", "AGENT_KIT_EXPECTED_VERSION", "agents-kb-install"],
+      "seed": {
+        "fts": [
+          {
+            "id": "EVAL-AGENT-KIT-STALE-INSTALL",
+            "title": "Refresh stale agent kit installs before debugging hooks",
+            "snippet": "Trigger: agent-runner entrypoint warns that the knowledge-system agent kit manifest is missing, has no version, or is older than AGENT_KIT_EXPECTED_VERSION. Correct rule: run agents-kb-install or /install.sh --agent all so Claude and Codex homes get current hooks, skills, settings, and .knowledge-system-version manifests.",
+            "score": 0.89,
+            "tags": ["agent-runner", "agent-kit", "installer", "agents-kb-install"]
+          },
+          {
+            "id": "EVAL-AGENT-RUNNER-UNRELATED",
+            "title": "Runner GitHub token helper setup",
+            "snippet": "GitHub MCP and git pushes use a short-lived GitHub App token helper in the agent runner.",
+            "score": 0.42,
+            "tags": ["agent-runner", "github"]
+          }
+        ],
+        "vector": [
+          {
+            "id": "EVAL-AGENT-KIT-STALE-INSTALL",
+            "title": "Refresh stale agent kit installs before debugging hooks",
+            "snippet": "When the runner warns that .knowledge-system-version is stale or missing, refresh the Claude and Codex agent kit with agents-kb-install instead of chasing hook behaviour in an old install.",
+            "score": 0.84,
+            "tags": ["agent-kit", "installer", "AGENT_KIT_EXPECTED_VERSION"]
+          }
+        ]
+      }
     }
   ]
 }
