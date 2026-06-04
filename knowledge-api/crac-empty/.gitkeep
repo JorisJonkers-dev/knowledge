@@ -1,4 +1,0 @@
-# Placeholder so the default (non-baked) Dockerfile build has a directory to
-# COPY into /opt/crac/checkpoint. The CI CRaC job overrides CRAC_CHECKPOINT_DIR
-# with the real CRIU checkpoint it produces; otherwise this empty dir ships and
-# crac-launch.sh finds no *.img files and cold-starts.
