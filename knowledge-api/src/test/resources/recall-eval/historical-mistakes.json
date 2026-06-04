@@ -75,6 +75,43 @@
           }
         ]
       }
+    },
+    {
+      "name": "runner git safe directory for gh checks",
+      "query": "gh pr checks fatal detected dubious ownership workspace safe directory",
+      "scope": "project:personal-stack",
+      "mode": "hybrid",
+      "limit": 3,
+      "maxRank": 3,
+      "expectedIds": ["EVAL-RUNNER-GIT-SAFE-DIRECTORY"],
+      "expectedTerms": ["safe.directory", "dubious ownership", "gh pr checks"],
+      "seed": {
+        "fts": [
+          {
+            "id": "EVAL-RUNNER-GIT-SAFE-DIRECTORY",
+            "title": "Trust /workspace for runner git commands",
+            "snippet": "Trigger: gh pr checks fails because git reports fatal detected dubious ownership in repository at /workspace. Correct rule: the agent-runner entrypoint must add the workspace root to git config --global safe.directory before future agents run gh or git commands.",
+            "score": 0.9,
+            "tags": ["agent-runner", "git", "safe.directory", "gh"]
+          },
+          {
+            "id": "EVAL-GH-UNRELATED",
+            "title": "GitHub App token helper for pushes",
+            "snippet": "Runner git pushes use the GitHub App credential helper over HTTPS when SSH deploy keys cannot push.",
+            "score": 0.43,
+            "tags": ["agent-runner", "github"]
+          }
+        ],
+        "vector": [
+          {
+            "id": "EVAL-RUNNER-GIT-SAFE-DIRECTORY",
+            "title": "Trust /workspace for runner git commands",
+            "snippet": "When gh pr checks trips dubious ownership, configure safe.directory for /workspace in the runner entrypoint so gh subprocess git calls work.",
+            "score": 0.86,
+            "tags": ["agent-runner", "git", "safe.directory", "gh"]
+          }
+        ]
+      }
     }
   ]
 }
