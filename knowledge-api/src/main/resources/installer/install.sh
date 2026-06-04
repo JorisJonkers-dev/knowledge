@@ -3,9 +3,10 @@
 #
 # Writes the local hooks + skills that pair with the knowledge-api
 # MCP server. Idempotent: re-running picks up any updates the server
-# ships in subsequent versions. Use `--agent claude|codex|all` to
-# choose the client home to manage. Use `--dry-run` to preview the
-# changes before they land. Use `--uninstall` to remove them.
+# ships in subsequent versions. Use `--agent claude|codex|all` and
+# `--scope user|project` to choose the client homes to manage. Use
+# `--dry-run` to preview the changes before they land. Use `--uninstall`
+# to remove them.
 #
 # Released versions are pinned by the @VERSION@ token below, which
 # the knowledge-api templates at request time from
@@ -15,20 +16,11 @@ set -euo pipefail
 
 readonly INSTALLER_VERSION='@VERSION@'
 readonly KB_URL='@KB_URL@'
-readonly CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-readonly HOOKS_DIR="${CLAUDE_HOME}/hooks"
-readonly SKILLS_DIR="${CLAUDE_HOME}/skills"
-readonly MANIFEST="${CLAUDE_HOME}/.knowledge-system-version"
-readonly CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-readonly CODEX_HOOKS_DIR="${CODEX_HOME}/hooks"
-readonly CODEX_SKILLS_DIR="${CODEX_HOME}/skills"
-readonly CODEX_HOOKS_CONFIG="${CODEX_HOME}/hooks.json"
-readonly CODEX_MANIFEST="${CODEX_HOME}/.knowledge-system-version"
-readonly CODEX_ALLOWLIST="${CODEX_HOME}/.knowledge-system-allowlist"
 
 DRY_RUN=0
 UNINSTALL=0
 AGENT=claude
+SCOPE=user
 
 usage() {
   cat <<USAGE
@@ -39,10 +31,13 @@ ${KB_URL}.
 
 Usage:
   curl -fsSL -H "Authorization: Bearer \$KB_BEARER_TOKEN" \\
-    ${KB_URL}/install.sh | bash [-s -- [--agent claude|codex|all] [--dry-run|--uninstall]]
+    ${KB_URL}/install.sh | bash [-s -- [--agent claude|codex|all] [--scope user|project] [--dry-run|--uninstall]]
 
 Options:
   --agent      Client home to manage. Defaults to "claude" for backwards compatibility.
+  --scope      Install scope. "user" writes to client config homes; "project"
+               writes to .claude/.codex under AGENT_KIT_PROJECT_ROOT or $PWD.
+               Defaults to "user".
   --dry-run     Print every change without modifying the filesystem.
   --uninstall   Remove every file this installer would write.
   --help        Show this help and exit.
@@ -50,6 +45,8 @@ Options:
 Environment:
   CLAUDE_CONFIG_DIR   Override the Claude Code config root (default ~/.claude).
   CODEX_HOME          Override the Codex config root (default ~/.codex).
+  AGENT_KIT_PROJECT_ROOT
+                      Project root for --scope project (default current directory).
 USAGE
 }
 
@@ -61,6 +58,12 @@ while [ "$#" -gt 0 ]; do
       AGENT="$1"
       ;;
     --agent=*) AGENT="${1#--agent=}" ;;
+    --scope)
+      shift
+      [ "$#" -gt 0 ] || { echo "--scope requires user or project" >&2; exit 64; }
+      SCOPE="$1"
+      ;;
+    --scope=*) SCOPE="${1#--scope=}" ;;
     --dry-run) DRY_RUN=1 ;;
     --uninstall) UNINSTALL=1 ;;
     --help|-h) usage; exit 0 ;;
@@ -88,6 +91,34 @@ case "${AGENT}" in
     exit 64
     ;;
 esac
+
+case "${SCOPE}" in
+  user|project) ;;
+  *)
+    echo "--scope must be user or project" >&2
+    usage >&2
+    exit 64
+    ;;
+esac
+
+if [ "${SCOPE}" = "project" ]; then
+  PROJECT_ROOT="${AGENT_KIT_PROJECT_ROOT:-$PWD}"
+  [ -d "${PROJECT_ROOT}" ] || { echo "project root does not exist: ${PROJECT_ROOT}" >&2; exit 64; }
+  readonly PROJECT_ROOT
+  readonly CLAUDE_HOME="$(cd "${PROJECT_ROOT}" && pwd)/.claude"
+  readonly CODEX_HOME="$(cd "${PROJECT_ROOT}" && pwd)/.codex"
+else
+  readonly CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  readonly CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+fi
+readonly HOOKS_DIR="${CLAUDE_HOME}/hooks"
+readonly SKILLS_DIR="${CLAUDE_HOME}/skills"
+readonly MANIFEST="${CLAUDE_HOME}/.knowledge-system-version"
+readonly CODEX_HOOKS_DIR="${CODEX_HOME}/hooks"
+readonly CODEX_SKILLS_DIR="${CODEX_HOME}/skills"
+readonly CODEX_HOOKS_CONFIG="${CODEX_HOME}/hooks.json"
+readonly CODEX_MANIFEST="${CODEX_HOME}/.knowledge-system-version"
+readonly CODEX_ALLOWLIST="${CODEX_HOME}/.knowledge-system-allowlist"
 
 log() { printf 'knowledge-system installer: %s\n' "$*"; }
 
@@ -155,7 +186,7 @@ if [ "${INSTALL_CODEX}" = 1 ]; then
 fi
 
 if [ "${UNINSTALL}" = 1 ]; then
-  log "uninstalling knowledge-system files (${INSTALLER_VERSION}, agent=${AGENT})"
+  log "uninstalling knowledge-system files (${INSTALLER_VERSION}, agent=${AGENT}, scope=${SCOPE})"
   for path in "${managed_paths[@]}"; do
     remove_file "$path"
   done
@@ -1223,6 +1254,7 @@ if [ "${DRY_RUN}" != 1 ] && [ "${INSTALL_CLAUDE}" = 1 ]; then
 # file listed below.
 version=${INSTALLER_VERSION}
 installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+scope=${SCOPE}
 managed:
 $(printf '  - %s\n' "${claude_managed_paths[@]}")
 MANIFEST
@@ -1237,6 +1269,7 @@ if [ "${DRY_RUN}" != 1 ] && [ "${INSTALL_CODEX}" = 1 ]; then
 version=${INSTALLER_VERSION}
 installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 agent=codex
+scope=${SCOPE}
 managed:
 $(printf '  - %s\n' "${codex_managed_paths[@]}")
 MANIFEST
@@ -1244,7 +1277,7 @@ MANIFEST
 fi
 
 cat <<EOF
-knowledge-system installer complete (${INSTALLER_VERSION}, agent=${AGENT}).
+knowledge-system installer complete (${INSTALLER_VERSION}, agent=${AGENT}, scope=${SCOPE}).
 EOF
 
 if [ "${INSTALL_CLAUDE}" = 1 ]; then
@@ -1317,5 +1350,5 @@ cat <<EOF
   - Provenance:     every auto-capture lands with source = "<agent>:auto-capture:<hook>"
                     or "claude-code:auto-digest:<session>" so a bulk revoke is one SQL query.
 
-Run with --agent ${AGENT} --uninstall to remove every selected file this installer wrote.
+Run with --agent ${AGENT} --scope ${SCOPE} --uninstall to remove every selected file this installer wrote.
 EOF
