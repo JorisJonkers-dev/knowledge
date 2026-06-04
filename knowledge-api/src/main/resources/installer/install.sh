@@ -385,6 +385,8 @@ description: Use when the user asks to reduce token usage, agent cost, context b
   `limit <= 5` for manual task setup.
 - Use hybrid retrieval for normal KB recall. Escalate to deep retrieval
   only after a miss, ambiguity, or non-obvious cross-topic dependency.
+- Keep runner MCP profiles narrow: `minimal` by default, wider profiles
+  only when the task needs those extra tools.
 - Do not install or enable low-fit skills just to grow the list. Skill
   metadata itself consumes prompt budget and very large skill sets can
   hide useful skills.
@@ -421,15 +423,20 @@ Checklist:
    repo `AGENTS.md`, and `.agents/skills`.
 2. Ensure the `knowledge` MCP server is configured and uses
    `KB_BEARER_TOKEN` rather than an inline secret where possible.
-3. Register bounded recall hooks:
+3. Keep runner MCP profiles narrow:
+   `minimal` for routine work, and `frontend`, `cluster`, `code-intel`,
+   or `full-diagnostic` only when the task needs those tools. Prefer
+   `AGENT_MCP_PROFILE` for one runner and
+   `AGENT_RUNTIME_DEFAULT_MCP_PROFILE` only for fleet-wide default changes.
+4. Register bounded recall hooks:
    `UserPromptSubmit` with `limit=3`/`mode=hybrid`,
    `PreToolUse` edit recall deduped per session, and `Stop` transcript
    digest with a per-session capture cap.
-4. Keep hooks silent on KB failure and add `KB_AUTO_MCP_DISABLED=1` as
+5. Keep hooks silent on KB failure and add `KB_AUTO_MCP_DISABLED=1` as
    a panic switch.
-5. Add or update memory files so future sessions know to consult and
+6. Add or update memory files so future sessions know to consult and
    update the KB without user reminders.
-6. Validate with dry-run hook payloads and at least one `tools/list` or
+7. Validate with dry-run hook payloads and at least one `tools/list` or
    `knowledge.recall` MCP call.
 
 Every Codex project skill, hook, or durable instruction must have an
