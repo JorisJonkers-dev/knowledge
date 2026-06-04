@@ -223,26 +223,71 @@ case "${KB_URL}" in
   *) KB_MCP_URL="${KB_URL%/}/mcp" ;;
 esac
 
-# Stdin carries the JSON event payload; the user_prompt field has the
-# raw text. Use python (always present on macOS / NixOS) to extract.
-prompt="$(python3 -c 'import json,sys; data=json.load(sys.stdin); print(data.get("user_prompt") or data.get("prompt") or "", end="")' 2>/dev/null || true)"
+# Stdin carries the JSON event payload. Extract the prompt from several
+# possible shapes: user_prompt string, messages list, or generic prompt.
+input="$(cat 2>/dev/null || true)"
+prompt="$(printf '%s' "${input}" | python3 -c '
+import json, sys
+
+def text(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return " ".join(text(v) for v in value)
+    if isinstance(value, dict):
+        if isinstance(value.get("text"), str):
+            return value["text"]
+        if "content" in value:
+            return text(value["content"])
+    return ""
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+
+for key in ("user_prompt", "prompt", "input"):
+    value = text(data.get(key))
+    if value:
+        print(value, end="")
+        sys.exit(0)
+
+messages = data.get("messages")
+if isinstance(messages, list) and messages:
+    print(text(messages[-1]), end="")
+' 2>/dev/null || true)"
 
 # Skip trivially-short prompts — overhead > value.
 [ "${#prompt}" -lt "${KB_RECALL_MIN_PROMPT_CHARS:-40}" ] && exit 0
 
-mode="${KB_RECALL_HOOK_MODE:-hybrid}"
+# Scope recall to the current repo when running inside a git checkout.
+project="$(git remote get-url origin 2>/dev/null | sed -e 's#\.git$##' -e 's#.*[/:]##')"
+[ -n "${project}" ] || project="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
+scope="${KB_RECALL_SCOPE:-project:${project}}"
+
+# Adaptive mode: short prompts rarely need semantic search.
+prompt_len="${#prompt}"
+if [ -n "${KB_RECALL_HOOK_MODE:-}" ]; then
+  mode="${KB_RECALL_HOOK_MODE}"
+elif [ "${prompt_len}" -lt 80 ]; then
+  mode="fast"
+else
+  mode="hybrid"
+fi
 limit="${KB_RECALL_HOOK_LIMIT:-3}"
+min_score="${KB_RECALL_MIN_SCORE:-0.004}"
 
 recall_payload() {
-  python3 -c 'import json,sys; print(json.dumps({
-  "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
-    "name":"knowledge.recall",
-    "arguments":{"query":sys.argv[1],"limit":int(sys.argv[2]),"mode":sys.argv[3]}}}))' \
-    "$1" "$2" "$3"
+  python3 -c 'import json,sys
+args = {"query": sys.argv[1], "limit": int(sys.argv[2]), "mode": sys.argv[3]}
+if sys.argv[4]:
+    args["scope"] = sys.argv[4]
+print(json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"knowledge.recall","arguments":args}}))' \
+    "$1" "$2" "$3" "$4"
 }
 
 call_recall() {
-  payload=$(recall_payload "$1" "$2" "$3") || return 1
+  payload=$(recall_payload "$1" "$2" "$3" "$4") || return 1
   curl -sS --connect-timeout 3 --max-time 5 \
     -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
     -H "Content-Type: application/json" \
@@ -250,36 +295,35 @@ call_recall() {
     "${KB_MCP_URL}" 2>/dev/null
 }
 
-response=$(call_recall "${prompt}" "${limit}" "${mode}") || response=""
+response=$(call_recall "${prompt}" "${limit}" "${mode}" "${scope}") || response=""
 if [ -z "${response}" ] && [ "${mode}" != "fast" ]; then
-  response=$(call_recall "${prompt}" "${limit}" fast) || exit 0
+  response=$(call_recall "${prompt}" "${limit}" fast "${scope}") || exit 0
 fi
 [ -n "${response}" ] || exit 0
 
-hits=$(printf '%s' "${response}" | python3 -c 'import json,sys
+printf '%s' "${response}" | python3 -c '
+import json, sys
 try:
     data = json.load(sys.stdin)
     hits = data["result"]["structuredContent"]["hits"]
-    if not hits: sys.exit(0)
-    print("## Knowledge base — relevant prior captures")
-    print()
-    for h in hits:
-        title = h.get("title", "")
-        scope = h.get("scope", "")
-        note_id = h.get("id", "")
-        try:
-            score = f"{float(h.get('score', 0.0)):.2f}"
-        except Exception:
-            score = str(h.get("score", ""))
-        print(f"- **{title}** (`{scope}`, score {score}) — id `{note_id}`")
-        snip = h.get("snippet","").replace("\n"," ").strip()
-        if snip: print(f"  > {snip[:220]}")
 except Exception:
-    sys.exit(0)' 2>/dev/null) || exit 0
-
-if [ -n "${hits}" ]; then
-  printf '%s\n' "${hits}"
-fi
+    sys.exit(0)
+min_score = float("'"${min_score}"'")
+hits = [h for h in hits if float(h.get("score", 0) or 0) >= min_score]
+if not hits:
+    sys.exit(0)
+print("## Knowledge base — relevant prior captures")
+print()
+for h in hits:
+    title = h.get("title", "")
+    scope = h.get("scope", "")
+    note_id = h.get("id", "")
+    score = h.get("score", 0)
+    print(f"- **{title}** (`{scope}`, score {score}) — id `{note_id}`")
+    snip = (h.get("snippet") or "").replace("\n", " ").strip()
+    if snip:
+        print(f"  > {snip[:160]}")
+' 2>/dev/null || true
 HOOK
 
 if [ "${INSTALL_CLAUDE}" = 1 ]; then
@@ -374,13 +418,16 @@ Use the KB as a small retrieval layer, not as a large context dump.
    `scope=project:personal-stack` for repo behavior, `topic:<slug>`
    for general framework/tool facts, or omit scope for the curated
    default.
-3. Use `mode=hybrid` for normal work. Use `mode=fast` for trivial
-   lookup or when latency matters more than semantic matching. Use
-   `mode=deep` only when fast or hybrid misses something important.
+3. Choose the right mode:
+   - `fast` — short/trivial lookups or latency-sensitive (< 80 chars).
+   - `hybrid` — normal work; FTS + vector + RRF.
+   - `deep` — only after fast or hybrid misses something important.
 4. Read only what is needed. Usually snippets are enough. If a hit
    matters, call `knowledge.relations(id, depth=1)` before fetching
    the full note.
-5. If the KB has no useful context, continue from repo/source
+5. Filter mentally: hits with scores below 0.01 are rarely useful —
+   treat as no match and continue from repo/source inspection.
+6. If the KB has no useful context, continue from repo/source
    inspection and say the KB had no relevant hits.
 
 Capture at the end only when the information is durable and reusable:
@@ -414,8 +461,9 @@ description: Use when the user asks to reduce token usage, agent cost, context b
   ranges next, fetch full files or notes only when needed.
 - Keep recall bounded: default to `limit=3` for hook-injected context and
   `limit <= 5` for manual task setup.
-- Use hybrid retrieval for normal KB recall. Escalate to deep retrieval
-  only after a miss, ambiguity, or non-obvious cross-topic dependency.
+- Use adaptive recall mode: `fast` for prompts under 80 chars, `hybrid`
+  for normal work, `deep` only after a miss or non-obvious cross-topic
+  dependency.
 - Keep runner MCP profiles narrow: `minimal` by default, wider profiles
   only when the task needs those extra tools.
 - Do not install or enable low-fit skills just to grow the list. Skill
@@ -428,6 +476,17 @@ When reporting command results, summarize only the lines needed to
 support the decision. Session digests should capture only reusable
 lessons above a confidence floor and should dedupe against existing KB
 hits before writing.
+
+## Tunable env vars
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `KB_RECALL_MIN_SCORE` | `0.004` | Minimum hit score injected into context; raise to tighten relevance. |
+| `KB_RECALL_HOOK_LIMIT` | `3` | Max recall hits per hook invocation. |
+| `KB_RECALL_HOOK_MODE` | auto | Override adaptive mode (`fast`/`hybrid`/`deep`). |
+| `KB_DIGEST_MAX_CHARS` | `30000` | Transcript chars fed to the stop-digest hook; lower = cheaper. |
+| `KB_DIGEST_MAX_CAPTURES` | `4` | Per-session capture cap for the stop hook. |
+| `KB_AUTO_MCP_DISABLED` | `0` | Set to `1` to disable all automatic KB calls (panic switch). |
 SKILL
 
 if [ "${INSTALL_CLAUDE}" = 1 ]; then
@@ -877,7 +936,7 @@ else
 fi
 [ "${remaining}" -gt 0 ] 2>/dev/null || exit 0
 
-transcript="$(python3 - "${transcript_path}" "${KB_DIGEST_MAX_CHARS:-60000}" <<'PY' 2>/dev/null
+transcript="$(python3 - "${transcript_path}" "${KB_DIGEST_MAX_CHARS:-30000}" <<'PY' 2>/dev/null
 import json, sys
 path, max_chars = sys.argv[1], int(sys.argv[2])
 rows = []
@@ -1053,7 +1112,7 @@ else
 fi
 [ "${remaining}" -gt 0 ] 2>/dev/null || exit 0
 
-transcript="$(python3 - "${transcript_path}" "${KB_DIGEST_MAX_CHARS:-60000}" <<'PY' 2>/dev/null
+transcript="$(python3 - "${transcript_path}" "${KB_DIGEST_MAX_CHARS:-30000}" <<'PY' 2>/dev/null
 import json, sys
 path, max_chars = sys.argv[1], int(sys.argv[2])
 rows = []
