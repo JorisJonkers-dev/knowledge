@@ -172,6 +172,26 @@ class McpToolsTest {
     }
 
     @Test
+    fun `merge_tags forwards source tags and projects idempotent merge counts`() {
+        every { adminAuthorization.requireAdmin() } returns "mcp:admin"
+        every { topicRepository.mergeTags(listOf("kt", "kts"), "kotlin") } returns
+            TopicRepository.MergeTagsResult(rowsRenamed = 2, rowsDeletedAsDupes = 1)
+
+        val out =
+            tools.call(
+                "knowledge.merge_tags",
+                mapper.readTree("""{"from":["kt","kts"],"into":"kotlin"}"""),
+            )!!
+
+        assertThat(out["from"]).isEqualTo(listOf("kt", "kts"))
+        assertThat(out["into"]).isEqualTo("kotlin")
+        assertThat(out["rows_renamed"]).isEqualTo(2)
+        assertThat(out["rows_dropped_as_dupes"]).isEqualTo(1)
+        assertThat(out["actor"]).isEqualTo("mcp:admin")
+        verify(exactly = 1) { topicRepository.mergeTags(listOf("kt", "kts"), "kotlin") }
+    }
+
+    @Test
     fun `digest_transcript projects the service's candidates verbatim`() {
         every { digestService.digest(any(), any(), any()) } returns
             listOf(

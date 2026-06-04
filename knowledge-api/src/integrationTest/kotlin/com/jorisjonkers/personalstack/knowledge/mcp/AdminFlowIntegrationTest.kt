@@ -22,11 +22,10 @@ import java.time.Instant
 
 /**
  * End-to-end coverage for the admin MCP tools (`add_topic`,
- * `update_topic`, `merge_topics`, `rename_tag`). Drives each one
- * through the JSON-RPC envelope with both an admin-eligible bearer
- * and a plain bearer, asserting that the auth gate rejects the
- * non-admin token with `-32001 Unauthorized` while the admin token
- * mutates state successfully.
+ * `update_topic`, `merge_topics`, `rename_tag`, `merge_tags`). Drives the tools
+ * through the JSON-RPC envelope with an admin-eligible bearer, plus a
+ * representative non-admin assertion that the auth gate rejects
+ * privileged mutations with `-32001 Unauthorized`.
  */
 @TestPropertySource(
     properties = [
@@ -162,6 +161,45 @@ class AdminFlowIntegrationTest : IntegrationTestBase() {
         assertThat(structured["rows_touched"].asInt()).isEqualTo(2)
         assertThat(structured["from"].asText()).isEqualTo("kt")
         assertThat(structured["to"].asText()).isEqualTo("kotlin")
+    }
+
+    @Test
+    fun `merge_tags folds duplicate and source rows into the canonical tag idempotently`() {
+        val duplicate = seedNote(tags = setOf("kt", "kotlin"))
+        val renamed = seedNote(tags = setOf("kt", "spring"))
+        val renamedSecondSource = seedNote(tags = setOf("kts", "gradle"))
+        val unrelated = seedNote(tags = setOf("vue"))
+
+        val response =
+            callRaw(
+                bearer = "admin-token",
+                name = "knowledge.merge_tags",
+                args = mapOf("from" to listOf("kt", "kts"), "into" to "kotlin"),
+            )
+
+        val structured = objectMapper.readTree(response)["result"]["structuredContent"]
+        assertThat(structured["from"].map { it.asText() }).containsExactly("kt", "kts")
+        assertThat(structured["into"].asText()).isEqualTo("kotlin")
+        assertThat(structured["rows_renamed"].asInt()).isEqualTo(2)
+        assertThat(structured["rows_dropped_as_dupes"].asInt()).isEqualTo(1)
+        assertThat(structured["actor"].asText()).isEqualTo("mcp:admin")
+
+        assertThat(noteRepository.findById(duplicate.id)?.tags).containsExactlyInAnyOrder("kotlin")
+        assertThat(noteRepository.findById(renamed.id)?.tags).containsExactlyInAnyOrder("kotlin", "spring")
+        assertThat(noteRepository.findById(renamedSecondSource.id)?.tags)
+            .containsExactlyInAnyOrder("kotlin", "gradle")
+        assertThat(noteRepository.findById(unrelated.id)?.tags).containsExactlyInAnyOrder("vue")
+
+        val secondResponse =
+            callRaw(
+                bearer = "admin-token",
+                name = "knowledge.merge_tags",
+                args = mapOf("from" to listOf("kt", "kts"), "into" to "kotlin"),
+            )
+
+        val secondStructured = objectMapper.readTree(secondResponse)["result"]["structuredContent"]
+        assertThat(secondStructured["rows_renamed"].asInt()).isEqualTo(0)
+        assertThat(secondStructured["rows_dropped_as_dupes"].asInt()).isEqualTo(0)
     }
 
     private fun seedTopic(
