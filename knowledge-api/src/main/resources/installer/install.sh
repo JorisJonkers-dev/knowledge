@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# knowledge-system installer for the Claude Code client.
+# knowledge-system installer for Claude Code and Codex clients.
 #
 # Writes the local hooks + skills that pair with the knowledge-api
 # MCP server. Idempotent: re-running picks up any updates the server
-# ships in subsequent versions. Use `--dry-run` to preview the
+# ships in subsequent versions. Use `--agent claude|codex|all` to
+# choose the client home to manage. Use `--dry-run` to preview the
 # changes before they land. Use `--uninstall` to remove them.
 #
 # Released versions are pinned by the @VERSION@ token below, which
@@ -18,39 +19,74 @@ readonly CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 readonly HOOKS_DIR="${CLAUDE_HOME}/hooks"
 readonly SKILLS_DIR="${CLAUDE_HOME}/skills"
 readonly MANIFEST="${CLAUDE_HOME}/.knowledge-system-version"
+readonly CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+readonly CODEX_HOOKS_DIR="${CODEX_HOME}/hooks"
+readonly CODEX_SKILLS_DIR="${CODEX_HOME}/skills"
+readonly CODEX_HOOKS_CONFIG="${CODEX_HOME}/hooks.json"
+readonly CODEX_MANIFEST="${CODEX_HOME}/.knowledge-system-version"
 
 DRY_RUN=0
 UNINSTALL=0
+AGENT=claude
 
 usage() {
   cat <<USAGE
 knowledge-system installer ${INSTALLER_VERSION}
 
-Writes Claude Code hooks + skills that pair with the MCP server at
+Writes Claude Code and/or Codex hooks + skills that pair with the MCP server at
 ${KB_URL}.
 
 Usage:
   curl -fsSL -H "Authorization: Bearer \$KB_BEARER_TOKEN" \\
-    ${KB_URL}/install.sh | bash [-s -- [--dry-run|--uninstall]]
+    ${KB_URL}/install.sh | bash [-s -- [--agent claude|codex|all] [--dry-run|--uninstall]]
 
 Options:
+  --agent      Client home to manage. Defaults to "claude" for backwards compatibility.
   --dry-run     Print every change without modifying the filesystem.
   --uninstall   Remove every file this installer would write.
   --help        Show this help and exit.
 
 Environment:
   CLAUDE_CONFIG_DIR   Override the Claude Code config root (default ~/.claude).
+  CODEX_HOME          Override the Codex config root (default ~/.codex).
 USAGE
 }
 
-for arg in "$@"; do
-  case "$arg" in
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --agent)
+      shift
+      [ "$#" -gt 0 ] || { echo "--agent requires claude, codex, or all" >&2; exit 64; }
+      AGENT="$1"
+      ;;
+    --agent=*) AGENT="${1#--agent=}" ;;
     --dry-run) DRY_RUN=1 ;;
     --uninstall) UNINSTALL=1 ;;
     --help|-h) usage; exit 0 ;;
-    *) echo "unknown option: $arg" >&2; usage >&2; exit 64 ;;
+    *) echo "unknown option: $1" >&2; usage >&2; exit 64 ;;
   esac
+  shift
 done
+
+case "${AGENT}" in
+  claude)
+    INSTALL_CLAUDE=1
+    INSTALL_CODEX=0
+    ;;
+  codex)
+    INSTALL_CLAUDE=0
+    INSTALL_CODEX=1
+    ;;
+  all)
+    INSTALL_CLAUDE=1
+    INSTALL_CODEX=1
+    ;;
+  *)
+    echo "--agent must be claude, codex, or all" >&2
+    usage >&2
+    exit 64
+    ;;
+esac
 
 log() { printf 'knowledge-system installer: %s\n' "$*"; }
 
@@ -82,7 +118,7 @@ remove_file() {
 readonly STATE_DIR="${CLAUDE_HOME}/state"
 readonly ALLOWLIST="${CLAUDE_HOME}/.knowledge-system-allowlist"
 
-managed_paths=(
+claude_managed_paths=(
   "${HOOKS_DIR}/user-prompt-submit-recall.sh"
   "${HOOKS_DIR}/pre-tool-use-edit-recall.sh"
   "${HOOKS_DIR}/pre-tool-use-git-commit-capture.sh"
@@ -95,12 +131,36 @@ managed_paths=(
   "${ALLOWLIST}"
 )
 
+codex_managed_paths=(
+  "${CODEX_HOOKS_DIR}/kb-user-prompt-recall.sh"
+  "${CODEX_HOOKS_DIR}/kb-stop-digest.sh"
+  "${CODEX_SKILLS_DIR}/topics/SKILL.md"
+  "${CODEX_SKILLS_DIR}/audit/SKILL.md"
+  "${CODEX_SKILLS_DIR}/kb-first/SKILL.md"
+  "${CODEX_SKILLS_DIR}/token-economy/SKILL.md"
+  "${CODEX_SKILLS_DIR}/agent-session-bootstrap/SKILL.md"
+  "${CODEX_HOOKS_CONFIG}"
+)
+
+managed_paths=()
+if [ "${INSTALL_CLAUDE}" = 1 ]; then
+  managed_paths+=("${claude_managed_paths[@]}")
+fi
+if [ "${INSTALL_CODEX}" = 1 ]; then
+  managed_paths+=("${codex_managed_paths[@]}")
+fi
+
 if [ "${UNINSTALL}" = 1 ]; then
-  log "uninstalling knowledge-system files (${INSTALLER_VERSION})"
+  log "uninstalling knowledge-system files (${INSTALLER_VERSION}, agent=${AGENT})"
   for path in "${managed_paths[@]}"; do
     remove_file "$path"
   done
-  remove_file "${MANIFEST}"
+  if [ "${INSTALL_CLAUDE}" = 1 ]; then
+    remove_file "${MANIFEST}"
+  fi
+  if [ "${INSTALL_CODEX}" = 1 ]; then
+    remove_file "${CODEX_MANIFEST}"
+  fi
   log "done"
   exit 0
 fi
@@ -169,7 +229,9 @@ if [ -n "${hits}" ]; then
 fi
 HOOK
 
-write_file "${HOOKS_DIR}/user-prompt-submit-recall.sh" 0755 "${USER_PROMPT_SUBMIT_HOOK}"
+if [ "${INSTALL_CLAUDE}" = 1 ]; then
+  write_file "${HOOKS_DIR}/user-prompt-submit-recall.sh" 0755 "${USER_PROMPT_SUBMIT_HOOK}"
+fi
 
 # -----------------------------------------------------------------
 # Skill: topics
@@ -202,7 +264,9 @@ without scope — the curator's classifier will assign one against
 the closed vocabulary.
 SKILL
 
-write_file "${SKILLS_DIR}/topics/SKILL.md" 0644 "${TOPICS_SKILL}"
+if [ "${INSTALL_CLAUDE}" = 1 ]; then
+  write_file "${SKILLS_DIR}/topics/SKILL.md" 0644 "${TOPICS_SKILL}"
+fi
 
 # -----------------------------------------------------------------
 # Skill: audit
@@ -234,7 +298,9 @@ the operator runs the proposed merges / renames manually after
 review.
 SKILL
 
-write_file "${SKILLS_DIR}/audit/SKILL.md" 0644 "${AUDIT_SKILL}"
+if [ "${INSTALL_CLAUDE}" = 1 ]; then
+  write_file "${SKILLS_DIR}/audit/SKILL.md" 0644 "${AUDIT_SKILL}"
+fi
 
 # -----------------------------------------------------------------
 # Skill: kb-first
@@ -274,7 +340,9 @@ Never run broad `scope=all` recall as a first step. Use it only after
 targeted recall fails and the task genuinely needs cross-scope context.
 SKILL
 
-write_file "${SKILLS_DIR}/kb-first/SKILL.md" 0644 "${KB_FIRST_SKILL}"
+if [ "${INSTALL_CLAUDE}" = 1 ]; then
+  write_file "${SKILLS_DIR}/kb-first/SKILL.md" 0644 "${KB_FIRST_SKILL}"
+fi
 
 # -----------------------------------------------------------------
 # Skill: token-economy
@@ -307,7 +375,9 @@ lessons above a confidence floor and should dedupe against existing KB
 hits before writing.
 SKILL
 
-write_file "${SKILLS_DIR}/token-economy/SKILL.md" 0644 "${TOKEN_ECONOMY_SKILL}"
+if [ "${INSTALL_CLAUDE}" = 1 ]; then
+  write_file "${SKILLS_DIR}/token-economy/SKILL.md" 0644 "${TOKEN_ECONOMY_SKILL}"
+fi
 
 # -----------------------------------------------------------------
 # Skill: agent-session-bootstrap
@@ -349,7 +419,9 @@ Do not put bearer tokens, secrets, or full transcripts into committed
 files.
 SKILL
 
-write_file "${SKILLS_DIR}/agent-session-bootstrap/SKILL.md" 0644 "${AGENT_SESSION_BOOTSTRAP_SKILL}"
+if [ "${INSTALL_CLAUDE}" = 1 ]; then
+  write_file "${SKILLS_DIR}/agent-session-bootstrap/SKILL.md" 0644 "${AGENT_SESSION_BOOTSTRAP_SKILL}"
+fi
 
 # -----------------------------------------------------------------
 # Path allowlist (gitignore-style). Hooks below skip any tool input
@@ -357,7 +429,7 @@ write_file "${SKILLS_DIR}/agent-session-bootstrap/SKILL.md" 0644 "${AGENT_SESSIO
 # typically carry secrets so an Edit on `.env` does not exfiltrate
 # the path to the KB recall query.
 # -----------------------------------------------------------------
-if [ ! -e "${ALLOWLIST}" ]; then
+if [ "${INSTALL_CLAUDE}" = 1 ] && [ ! -e "${ALLOWLIST}" ]; then
   read -r -d '' ALLOWLIST_DEFAULTS <<'ALLOW' || true
 # knowledge-system auto-MCP path allowlist (gitignore-style).
 # Lines starting with `#` are comments. Patterns match against the
@@ -395,7 +467,7 @@ id_ed25519
 **/Google/Chrome/Default/Login Data*
 ALLOW
   write_file "${ALLOWLIST}" 0644 "${ALLOWLIST_DEFAULTS}"
-else
+elif [ "${INSTALL_CLAUDE}" = 1 ]; then
   log "preserving existing ${ALLOWLIST}"
 fi
 
@@ -504,7 +576,9 @@ except Exception:
     sys.exit(0)' 2>/dev/null || true
 HOOK
 
-write_file "${HOOKS_DIR}/pre-tool-use-edit-recall.sh" 0755 "${PRE_TOOL_USE_EDIT_HOOK}"
+if [ "${INSTALL_CLAUDE}" = 1 ]; then
+  write_file "${HOOKS_DIR}/pre-tool-use-edit-recall.sh" 0755 "${PRE_TOOL_USE_EDIT_HOOK}"
+fi
 
 # -----------------------------------------------------------------
 # Hook: PreToolUse — Bash matching `git commit` capture
@@ -590,7 +664,9 @@ curl -sS --connect-timeout 3 --max-time 5 \
   "${KB_MCP_URL}" >/dev/null 2>&1 || true
 HOOK
 
-write_file "${HOOKS_DIR}/pre-tool-use-git-commit-capture.sh" 0755 "${PRE_TOOL_USE_GIT_COMMIT_HOOK}"
+if [ "${INSTALL_CLAUDE}" = 1 ]; then
+  write_file "${HOOKS_DIR}/pre-tool-use-git-commit-capture.sh" 0755 "${PRE_TOOL_USE_GIT_COMMIT_HOOK}"
+fi
 
 # -----------------------------------------------------------------
 # Hook: Stop — session-digest auto-capture
@@ -753,12 +829,228 @@ echo "${remaining}" > "${remaining_file}"
 echo "$(date -u +%FT%TZ) stop-digest done session=${session} emitted=${emitted}" >>"${LOG}" 2>/dev/null
 HOOK
 
-write_file "${HOOKS_DIR}/stop-session-digest.sh" 0755 "${STOP_SESSION_DIGEST_HOOK}"
+if [ "${INSTALL_CLAUDE}" = 1 ]; then
+  write_file "${HOOKS_DIR}/stop-session-digest.sh" 0755 "${STOP_SESSION_DIGEST_HOOK}"
+fi
+
+# -----------------------------------------------------------------
+# Codex project hook mirror
+# -----------------------------------------------------------------
+read -r -d '' CODEX_STOP_DIGEST_HOOK <<'HOOK' || true
+#!/usr/bin/env bash
+# Codex Stop hook: summarize reusable lessons from the transcript and
+# capture a capped set into the KB. Silent on failure.
+
+set -u
+
+[ "${KB_AUTO_MCP_DISABLED:-0}" = 1 ] && exit 0
+[ -z "${KB_BEARER_TOKEN:-}" ] && exit 0
+
+KB_URL="${KB_URL:-@KB_URL@}"
+case "${KB_URL}" in
+  */mcp) KB_MCP_URL="${KB_URL}" ;;
+  *) KB_MCP_URL="${KB_URL%/}/mcp" ;;
+esac
+
+CODEX_STATE="${CODEX_HOME:-${HOME}/.codex}"
+STATE_DIR="${CODEX_STATE}/state"
+LOG="${STATE_DIR}/auto-kb.log"
+mkdir -p "${STATE_DIR}"
+
+input="$(cat 2>/dev/null || true)"
+read -r session transcript_path < <(printf '%s' "${input}" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("unknown")
+    sys.exit(0)
+session = data.get("session_id") or data.get("conversation_id") or data.get("thread_id") or "unknown"
+path = data.get("transcript_path") or data.get("transcriptPath") or data.get("log_path") or ""
+print(session, path)
+' 2>/dev/null)
+
+[ -n "${transcript_path:-}" ] && [ -r "${transcript_path}" ] || exit 0
+
+session_dir="${STATE_DIR}/sessions/${session}"
+mkdir -p "${session_dir}"
+remaining_file="${session_dir}/digest-budget"
+if [ -r "${remaining_file}" ]; then
+  remaining="$(cat "${remaining_file}")"
+else
+  remaining="${KB_DIGEST_MAX_CAPTURES:-4}"
+fi
+[ "${remaining}" -gt 0 ] 2>/dev/null || exit 0
+
+transcript="$(python3 - "${transcript_path}" "${KB_DIGEST_MAX_CHARS:-60000}" <<'PY' 2>/dev/null
+import json, sys
+path, max_chars = sys.argv[1], int(sys.argv[2])
+rows = []
+
+def text(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return " ".join(text(v) for v in value)
+    if isinstance(value, dict):
+        if isinstance(value.get("text"), str):
+            return value["text"]
+        if "content" in value:
+            return text(value["content"])
+    return ""
+
+with open(path, errors="ignore") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        role = row.get("role") or row.get("type") or row.get("source") or "?"
+        content = text(row.get("content") or row.get("text") or row.get("message") or row)
+        if content:
+            rows.append(f"[{role}] {content}")
+out = "\n".join(rows)
+print(out[-max_chars:])
+PY
+)" || exit 0
+
+[ -n "${transcript}" ] || exit 0
+
+payload="$(python3 -c 'import json,sys; print(json.dumps({
+  "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+    "name":"knowledge.digest_transcript",
+    "arguments":{"transcript":sys.argv[1],"max_candidates":int(sys.argv[2])}}}))' \
+  "${transcript}" "${remaining}")"
+
+response="$(curl -sS --connect-timeout 5 --max-time 60 \
+  -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "${payload}" \
+  "${KB_MCP_URL}" 2>/dev/null)" || exit 0
+
+candidates="$(printf '%s' "${response}" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    print(json.dumps(data["result"]["structuredContent"]["candidates"]))
+except Exception:
+    print("[]")
+' 2>/dev/null || echo "[]")"
+
+project="$(git remote get-url origin 2>/dev/null | sed -e 's#\.git$##' -e 's#.*[/:]##')"
+[ -n "${project}" ] || project="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
+fallback_scope="project:${project}"
+emitted=0
+
+while IFS= read -r line; do
+  [ -n "${line}" ] || continue
+  [ "${remaining}" -gt 0 ] 2>/dev/null || break
+
+  title="$(printf '%s' "${line}" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("title",""), end="")')"
+  body="$(printf '%s' "${line}" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("body",""), end="")')"
+  topic="$(printf '%s' "${line}" | python3 -c 'import json,sys; print((json.loads(sys.stdin.read()).get("suggested_topic") or ""), end="")')"
+  tags_json="$(printf '%s' "${line}" | python3 -c 'import json,sys; print(json.dumps(json.loads(sys.stdin.read()).get("suggested_tags") or []), end="")')"
+  [ -n "${title}" ] && [ -n "${body}" ] || continue
+
+  dedupe_payload="$(python3 -c 'import json,sys; print(json.dumps({
+    "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+      "name":"knowledge.recall","arguments":{
+        "query": sys.argv[1], "limit": 1, "mode": "hybrid"}}}))' "${title} ${body}")"
+  duplicate_count="$(curl -sS --connect-timeout 3 --max-time 5 \
+    -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "${dedupe_payload}" \
+    "${KB_MCP_URL}" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    hits = json.load(sys.stdin)["result"]["structuredContent"]["hits"]
+    print(1 if hits and float(hits[0].get("score", 0)) >= float("'${KB_DIGEST_DEDUPE_SCORE:-0.86}'") else 0)
+except Exception:
+    print(0)
+' 2>/dev/null || echo 0)"
+  [ "${duplicate_count}" = 1 ] && continue
+
+  scope="${fallback_scope}"
+  [ -n "${topic}" ] && scope="topic:${topic}"
+  capture_payload="$(python3 -c 'import json,sys; print(json.dumps({
+    "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+      "name":"knowledge.capture_lesson","arguments":{
+        "title": sys.argv[1],
+        "body": sys.argv[2],
+        "scope": sys.argv[3],
+        "source": "codex:auto-digest:" + sys.argv[4],
+        "session_id": sys.argv[4],
+        "tags": json.loads(sys.argv[5])}}}))' \
+    "${title}" "${body}" "${scope}" "${session}" "${tags_json}")"
+  curl -sS --connect-timeout 3 --max-time 10 \
+    -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "${capture_payload}" \
+    "${KB_MCP_URL}" >/dev/null 2>&1 || continue
+  remaining=$((remaining - 1))
+  emitted=$((emitted + 1))
+done < <(printf '%s' "${candidates}" | python3 -c '
+import json, sys
+try:
+    for row in json.load(sys.stdin):
+        print(json.dumps(row))
+except Exception:
+    pass
+' 2>/dev/null)
+
+echo "${remaining}" > "${remaining_file}"
+echo "$(date -u +%FT%TZ) codex-stop-digest session=${session} emitted=${emitted}" >>"${LOG}" 2>/dev/null
+HOOK
+
+read -r -d '' CODEX_HOOKS_JSON <<HOOKS || true
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CODEX_HOOKS_DIR}/kb-user-prompt-recall.sh",
+            "timeout": 5,
+            "statusMessage": "Loading KB context"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CODEX_HOOKS_DIR}/kb-stop-digest.sh",
+            "timeout": 60,
+            "statusMessage": "Capturing KB lessons"
+          }
+        ]
+      }
+    ]
+  }
+}
+HOOKS
+
+if [ "${INSTALL_CODEX}" = 1 ]; then
+  write_file "${CODEX_HOOKS_DIR}/kb-user-prompt-recall.sh" 0755 "${USER_PROMPT_SUBMIT_HOOK}"
+  write_file "${CODEX_HOOKS_DIR}/kb-stop-digest.sh" 0755 "${CODEX_STOP_DIGEST_HOOK}"
+  write_file "${CODEX_SKILLS_DIR}/topics/SKILL.md" 0644 "${TOPICS_SKILL}"
+  write_file "${CODEX_SKILLS_DIR}/audit/SKILL.md" 0644 "${AUDIT_SKILL}"
+  write_file "${CODEX_SKILLS_DIR}/kb-first/SKILL.md" 0644 "${KB_FIRST_SKILL}"
+  write_file "${CODEX_SKILLS_DIR}/token-economy/SKILL.md" 0644 "${TOKEN_ECONOMY_SKILL}"
+  write_file "${CODEX_SKILLS_DIR}/agent-session-bootstrap/SKILL.md" 0644 "${AGENT_SESSION_BOOTSTRAP_SKILL}"
+  write_file "${CODEX_HOOKS_CONFIG}" 0644 "${CODEX_HOOKS_JSON}"
+fi
 
 # -----------------------------------------------------------------
 # Manifest
 # -----------------------------------------------------------------
-if [ "${DRY_RUN}" != 1 ]; then
+if [ "${DRY_RUN}" != 1 ] && [ "${INSTALL_CLAUDE}" = 1 ]; then
   cat > "${MANIFEST}" <<MANIFEST
 # Managed by the knowledge-system installer (${KB_URL}/install.sh).
 # Re-run that command to update. Use --uninstall to remove every
@@ -766,19 +1058,36 @@ if [ "${DRY_RUN}" != 1 ]; then
 version=${INSTALLER_VERSION}
 installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 managed:
-$(printf '  - %s\n' "${managed_paths[@]}")
+$(printf '  - %s\n' "${claude_managed_paths[@]}")
 MANIFEST
   log "wrote ${MANIFEST}"
 fi
 
+if [ "${DRY_RUN}" != 1 ] && [ "${INSTALL_CODEX}" = 1 ]; then
+  cat > "${CODEX_MANIFEST}" <<MANIFEST
+# Managed by the knowledge-system installer (${KB_URL}/install.sh).
+# Re-run that command to update. Use --agent codex --uninstall to remove every
+# Codex file listed below.
+version=${INSTALLER_VERSION}
+installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+agent=codex
+managed:
+$(printf '  - %s\n' "${codex_managed_paths[@]}")
+MANIFEST
+  log "wrote ${CODEX_MANIFEST}"
+fi
+
 cat <<EOF
-knowledge-system installer complete (${INSTALLER_VERSION}).
+knowledge-system installer complete (${INSTALLER_VERSION}, agent=${AGENT}).
+EOF
 
-Next steps:
+if [ "${INSTALL_CLAUDE}" = 1 ]; then
+  cat <<EOF
 
-  1. Register the four hooks in ${CLAUDE_HOME}/settings.json
-     under the matching "hooks.<event>" arrays. Suggested config
-     (drop into your settings under "hooks"):
+Claude next steps:
+
+  1. Register the four hooks in ${CLAUDE_HOME}/settings.json under the
+     matching "hooks.<event>" arrays. Suggested config:
 
      "UserPromptSubmit": [
        { "matcher": ".*", "hooks": [
@@ -801,10 +1110,25 @@ Next steps:
            "async": true,
            "timeout": 60 } ] } ]
 
-  2. Make sure KB_BEARER_TOKEN is set in your shell / Claude Code env:
+  2. Make sure KB_BEARER_TOKEN is set in the Claude Code environment:
        export KB_BEARER_TOKEN="<your-token>"
+EOF
+fi
 
-  3. Verify with:  curl -sS -H "Authorization: Bearer \$KB_BEARER_TOKEN" \\
+if [ "${INSTALL_CODEX}" = 1 ]; then
+  cat <<EOF
+
+Codex next steps:
+
+  1. ${CODEX_HOOKS_CONFIG} has been written with UserPromptSubmit and Stop hooks.
+  2. Make sure KB_BEARER_TOKEN is set in the Codex environment:
+       export KB_BEARER_TOKEN="<your-token>"
+EOF
+fi
+
+cat <<EOF
+
+Verify with:  curl -sS -H "Authorization: Bearer \$KB_BEARER_TOKEN" \\
                      ${KB_URL}/mcp -d '{"jsonrpc":"2.0","id":1,"method":"ping"}'
 
 Safety controls:
@@ -814,5 +1138,5 @@ Safety controls:
   - Provenance:     every auto-capture lands with source = "claude-code:auto-capture:<hook>"
                     or "claude-code:auto-digest:<session>" so a bulk revoke is one SQL query.
 
-Run with --uninstall to remove every file this installer wrote.
+Run with --agent ${AGENT} --uninstall to remove every selected file this installer wrote.
 EOF
