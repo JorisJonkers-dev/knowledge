@@ -20,8 +20,9 @@ import org.springframework.stereotype.Service
  *  - [RecallMode.HYBRID] = FTS + pgvector ANN, RRF-fused. Falls back
  *    to FTS-only when the query embedder fails (so a cold Ollama or
  *    a model swap doesn't break recall).
- *  - [RecallMode.DEEP] = HYBRID + listwise rerank. LightRAG mix graph
- *    retrieval plugs in here in a follow-up PR.
+ *  - [RecallMode.DEEP] = HYBRID + optional LightRAG graph context +
+ *    listwise rerank. The graph leg is disabled by default and
+ *    best-effort when enabled.
  *
  * Every recall call emits a Micrometer Observation with attributes
  * the read-side Grafana panel keys on. Failure of the vector leg is
@@ -34,6 +35,7 @@ class RecallService(
     private val recallRepository: RecallRepository,
     private val embeddingRepository: EmbeddingRepository,
     private val queryEmbedder: QueryEmbedder,
+    private val graphRetriever: GraphRetriever,
     private val reranker: Reranker,
     private val observationRegistry: ObservationRegistry,
     @param:Value("\${knowledge.recall.default-mode:fast}")
@@ -97,14 +99,26 @@ class RecallService(
         observation: io.micrometer.observation.Observation,
     ): List<RecallHit> {
         // Pull a deeper candidate set so the listwise reranker has tail
-        // rows to consider — same shape as the hybrid leg but over-
-        // fetched. The reranker truncates back to `limit` before return.
-        val fused = recallHybrid(query, scope, limit * RERANK_OVERFETCH_FACTOR, observation)
-        if (fused.size <= 1) {
+        // rows to consider. The graph leg is fused at the hit level, not
+        // at the vector level, because LightRAG owns a separate embedding
+        // model and graph store.
+        val candidateLimit = limit * RERANK_OVERFETCH_FACTOR
+        val hybrid = recallHybrid(query, scope, candidateLimit, observation)
+        val graphHits = recallGraph(query, scope, limit, observation)
+        val candidates =
+            if (graphHits.isEmpty()) {
+                hybrid
+            } else {
+                ReciprocalRankFusion.fuse(listOf(hybrid, graphHits), k = rrfK, limit = candidateLimit)
+            }
+        observation.highCardinalityKeyValue("recall.graph_hits", graphHits.size.toString())
+        observation.highCardinalityKeyValue("recall.deep_candidates", candidates.size.toString())
+
+        if (candidates.size <= 1) {
             observation.lowCardinalityKeyValue("recall.rerank_used", "false")
-            return fused.take(limit)
+            return candidates.take(limit)
         }
-        val reranked = reranker.rerank(query, fused, keep = limit)
+        val reranked = reranker.rerank(query, candidates, keep = limit)
         observation.lowCardinalityKeyValue("recall.rerank_used", "true")
         observation.highCardinalityKeyValue("recall.reranked_hits", reranked.size.toString())
         return reranked
@@ -181,6 +195,21 @@ class RecallService(
         observation.highCardinalityKeyValue("recall.fused_hits", fused.size.toString())
         return fused
     }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun recallGraph(
+        query: String,
+        scope: String?,
+        limit: Int,
+        observation: io.micrometer.observation.Observation,
+    ): List<RecallHit> =
+        try {
+            graphRetriever.retrieve(query, scope, limit)
+        } catch (ex: RuntimeException) {
+            log.warn("graph leg degraded; falling back to hybrid-only deep recall", ex)
+            observation.lowCardinalityKeyValue("recall.graph_degraded", "true")
+            emptyList()
+        }
 
     private fun scopeKind(scope: String?): String =
         when {

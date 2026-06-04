@@ -245,9 +245,9 @@ class ReadMcpTools(
         private const val RECALL_TOOL_DESCRIPTION =
             "Layered recall over kb_notes. `mode=fast` is single-leg Postgres FTS (~50 ms p50). " +
                 "`mode=hybrid` adds the pgvector ANN leg and fuses with Reciprocal Rank Fusion " +
-                "(~100-300 ms once Ollama is warm). `mode=deep` runs hybrid retrieval and then " +
-                "applies a listwise reranker to lift non-obvious candidates — it does not currently " +
-                "add LightRAG graph traversal (planned follow-up). Server-side default is " +
+                "(~100-300 ms once Ollama is warm). `mode=deep` runs hybrid retrieval, optionally " +
+                "fuses LightRAG graph context when `knowledge.recall.graph.enabled=true`, then " +
+                "applies a listwise reranker. Server-side default is " +
                 "configurable (`knowledge.recall.default-mode`); when omitted, the server's choice applies."
 
         // Hard ceiling for the agent-facing depth; the repo enforces

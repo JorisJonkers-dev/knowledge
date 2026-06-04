@@ -17,19 +17,23 @@ class RecallServiceTest {
     private val recallRepository = mockk<RecallRepository>()
     private val embeddingRepository = mockk<EmbeddingRepository>()
     private val queryEmbedder = mockk<QueryEmbedder>()
+    private val graphRetriever = mockk<GraphRetriever>()
     private val reranker = mockk<Reranker>()
 
-    private fun service(defaultModeWire: String = "fast"): RecallService =
-        RecallService(
+    private fun service(defaultModeWire: String = "fast"): RecallService {
+        every { graphRetriever.retrieve(any(), any(), any()) } returns emptyList()
+        return RecallService(
             noteRepository = noteRepository,
             recallRepository = recallRepository,
             embeddingRepository = embeddingRepository,
             queryEmbedder = queryEmbedder,
+            graphRetriever = graphRetriever,
             reranker = reranker,
             observationRegistry = ObservationRegistry.NOOP,
             defaultModeWire = defaultModeWire,
             rrfK = 60,
         )
+    }
 
     private fun hit(
         id: String,
@@ -123,6 +127,26 @@ class RecallServiceTest {
 
         assertThat(hits.map { it.id }).containsExactly("ID-D", "ID-B", "ID-A", "ID-C")
         verify(exactly = 1) { reranker.rerank("rockets", any(), 5) }
+    }
+
+    @Test
+    fun `deep mode fuses graph candidates before reranking`() {
+        val recallService = service()
+        every { recallRepository.recall("rockets", "personal", 30) } returns
+            listOf(hit("ID-A"), hit("ID-B"))
+        every { queryEmbedder.embed("rockets") } returns floatArrayOf(0.1f, 0.2f)
+        every { embeddingRepository.recallVector(any(), "personal", 30) } returns listOf(hit("ID-B"))
+        every { graphRetriever.retrieve("rockets", "personal", 5) } returns
+            listOf(hit("GRAPH-A", score = 0.55))
+        every { reranker.rerank("rockets", any(), 5) } answers {
+            val input = secondArg<List<RecallHit>>()
+            assertThat(input.map { it.id }).contains("GRAPH-A")
+            input.sortedByDescending { if (it.id == "GRAPH-A") 1 else 0 }
+        }
+
+        val hits = recallService.recall("rockets", "personal", 5, RecallMode.DEEP)
+
+        assertThat(hits.first().id).isEqualTo("GRAPH-A")
     }
 
     @Test

@@ -8,9 +8,10 @@ Exposes an HTTP Streamable JSON-RPC MCP endpoint at
 exchange for the Python ingest worker. Read tools (`recall`,
 `list_recent`, `get_note`, `find_conflicts`) query the same tables
 via jOOQ. Recall supports `fast` Postgres FTS, `hybrid` FTS +
-pgvector RRF, and `deep` hybrid + reranker. The curator also publishes
-promoted notes to the in-cluster LightRAG service so graph/vector
-retrieval can be added without changing capture flow.
+pgvector RRF, and `deep` hybrid + optional LightRAG graph context +
+reranker. LightRAG stays in its own vector/graph store; deep recall
+fuses graph context at the hit level only, and the graph leg is an
+explicit opt-in via `KB_RECALL_GRAPH_ENABLED=true`.
 
 ## Claude Code integration — workstation setup
 

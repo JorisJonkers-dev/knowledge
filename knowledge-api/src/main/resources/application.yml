@@ -107,7 +107,8 @@ springdoc:
 knowledge:
   recall:
     # Default mode for `knowledge.recall`. `fast` = FTS-only, `hybrid`
-    # = FTS + pgvector + RRF fusion, `deep` = hybrid + reranker.
+    # = FTS + pgvector + RRF fusion, `deep` = hybrid + optional
+    # LightRAG graph context + reranker.
     # Local/dev stays fast by default; production sets
     # KB_RECALL_DEFAULT_MODE=hybrid so agent hooks get semantic recall
     # without each session having to request it explicitly.
@@ -121,6 +122,14 @@ knowledge:
     # degrade cleanly instead of holding MCP calls open for a minute.
     fts-query-timeout-seconds: ${KB_RECALL_FTS_QUERY_TIMEOUT_SECONDS:5}
     vector-query-timeout-seconds: ${KB_RECALL_VECTOR_QUERY_TIMEOUT_SECONDS:5}
+    graph:
+      # LightRAG uses its own embedding model/tables, so deep recall
+      # fuses graph context at the hit level. Keep disabled until the
+      # recall evals and latency dashboards justify turning it on.
+      enabled: ${KB_RECALL_GRAPH_ENABLED:false}
+      lightrag-url: ${LIGHTRAG_URL:http://lightrag.knowledge-system.svc.cluster.local:9621}
+      query-timeout-seconds: ${KB_RECALL_GRAPH_QUERY_TIMEOUT_SECONDS:5}
+      max-snippet-chars: ${KB_RECALL_GRAPH_MAX_SNIPPET_CHARS:2000}
   ollama:
     # Ollama OpenAI-compat base URL (with `/v1`). Same default the
     # curator uses; override in deployment.yaml when the cluster DNS

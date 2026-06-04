@@ -7,9 +7,9 @@ package com.jorisjonkers.personalstack.knowledge.recall
  *  - [FAST]: single-leg Postgres FTS. Phase 4c-2 baseline, ~50 ms p50.
  *  - [HYBRID]: FTS + pgvector ANN, reciprocal-rank-fused. ~100-300 ms
  *    once Ollama is warm. Default once the corpus is fully embedded.
- *  - [DEEP]: HYBRID + LightRAG mix-mode + listwise rerank. Wired in a
- *    follow-up PR. For now [DEEP] aliases to [HYBRID] so callers can
- *    request it without erroring; the upgrade is transparent.
+ *  - [DEEP]: HYBRID + optional LightRAG graph/context hit + listwise
+ *    rerank. The graph leg is disabled by default and fuses at the hit
+ *    level so LightRAG's separate vector space stays isolated.
  *
  * `EXPAND` (HyDE + multi-query) is deliberately not modelled yet —
  * the prior design proposal marks it as diminishing-returns at ≤10³

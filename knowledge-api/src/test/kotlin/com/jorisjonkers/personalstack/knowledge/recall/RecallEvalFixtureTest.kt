@@ -73,6 +73,7 @@ class RecallEvalFixtureTest {
         val recallRepository = mockk<RecallRepository>()
         val embeddingRepository = mockk<EmbeddingRepository>()
         val queryEmbedder = mockk<QueryEmbedder>()
+        val graphRetriever = mockk<GraphRetriever>()
         val reranker = mockk<Reranker>()
         val mode = RecallMode.fromWire(evalCase.mode) ?: error("Unknown recall mode ${evalCase.mode}")
 
@@ -81,6 +82,7 @@ class RecallEvalFixtureTest {
         every { queryEmbedder.embed(evalCase.query) } returns floatArrayOf(0.1f, 0.2f, 0.3f)
         every { embeddingRepository.recallVector(any(), evalCase.scope, any()) } returns
             evalCase.seed.vector.map { it.toHit(evalCase.scope) }
+        every { graphRetriever.retrieve(any(), any(), any()) } returns emptyList()
         every { reranker.rerank(evalCase.query, any(), evalCase.limit) } answers {
             val input = secondArg<List<RecallHit>>()
             if (evalCase.seed.rerankedIds.isEmpty()) {
@@ -96,6 +98,7 @@ class RecallEvalFixtureTest {
                 recallRepository = recallRepository,
                 embeddingRepository = embeddingRepository,
                 queryEmbedder = queryEmbedder,
+                graphRetriever = graphRetriever,
                 reranker = reranker,
                 observationRegistry = ObservationRegistry.NOOP,
                 defaultModeWire = evalCase.mode,
