@@ -198,17 +198,28 @@ prompt="$(python3 -c 'import json,sys; data=json.load(sys.stdin); print(data.get
 mode="${KB_RECALL_HOOK_MODE:-hybrid}"
 limit="${KB_RECALL_HOOK_LIMIT:-3}"
 
-payload=$(python3 -c 'import json,sys; print(json.dumps({
+recall_payload() {
+  python3 -c 'import json,sys; print(json.dumps({
   "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
     "name":"knowledge.recall",
     "arguments":{"query":sys.argv[1],"limit":int(sys.argv[2]),"mode":sys.argv[3]}}}))' \
-  "${prompt}" "${limit}" "${mode}")
+    "$1" "$2" "$3"
+}
 
-response=$(curl -sS --connect-timeout 3 --max-time 5 \
-  -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d "${payload}" \
-  "${KB_MCP_URL}" 2>/dev/null) || exit 0
+call_recall() {
+  payload=$(recall_payload "$1" "$2" "$3") || return 1
+  curl -sS --connect-timeout 3 --max-time 5 \
+    -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "${payload}" \
+    "${KB_MCP_URL}" 2>/dev/null
+}
+
+response=$(call_recall "${prompt}" "${limit}" "${mode}") || response=""
+if [ -z "${response}" ] && [ "${mode}" != "fast" ]; then
+  response=$(call_recall "${prompt}" "${limit}" fast) || exit 0
+fi
+[ -n "${response}" ] || exit 0
 
 hits=$(printf '%s' "${response}" | python3 -c 'import json,sys
 try:
@@ -548,17 +559,28 @@ query="${basename} ${parent}"
 mode="${KB_RECALL_HOOK_MODE:-hybrid}"
 limit="${KB_RECALL_EDIT_LIMIT:-2}"
 
-payload=$(python3 -c 'import json,sys; print(json.dumps({
+recall_payload() {
+  python3 -c 'import json,sys; print(json.dumps({
   "jsonrpc":"2.0","id":1,"method":"tools/call","params":{
     "name":"knowledge.recall",
     "arguments":{"query":sys.argv[1],"limit":int(sys.argv[2]),"mode":sys.argv[3]}}}))' \
-  "${query}" "${limit}" "${mode}")
+    "$1" "$2" "$3"
+}
 
-response=$(curl -sS --connect-timeout 3 --max-time 5 \
-  -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d "${payload}" \
-  "${KB_MCP_URL}" 2>/dev/null) || exit 0
+call_recall() {
+  payload=$(recall_payload "$1" "$2" "$3") || return 1
+  curl -sS --connect-timeout 3 --max-time 5 \
+    -H "Authorization: Bearer ${KB_BEARER_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "${payload}" \
+    "${KB_MCP_URL}" 2>/dev/null
+}
+
+response=$(call_recall "${query}" "${limit}" "${mode}") || response=""
+if [ -z "${response}" ] && [ "${mode}" != "fast" ]; then
+  response=$(call_recall "${query}" "${limit}" fast) || exit 0
+fi
+[ -n "${response}" ] || exit 0
 
 printf '%s' "${response}" | python3 -c '
 import json, sys
