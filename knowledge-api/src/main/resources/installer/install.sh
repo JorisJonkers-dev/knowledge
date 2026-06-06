@@ -728,9 +728,11 @@ def run_claude(prompt: str, model: str, *, cwd: Optional[Path] = None,
 
 
 def run_codex(prompt: str, model: str, *, cwd: Optional[Path] = None,
-              timeout: int = PLAN_TIMEOUT_S) -> EngineResult:
+              timeout: int = PLAN_TIMEOUT_S, sandbox: str = "read-only") -> EngineResult:
     # `-o` writes only the final assistant message to a file; stdout is noisy
     # (banner + hook wrappers) so we read the message back from the file.
+    # sandbox is "read-only" for planning and "workspace-write" for a worker
+    # that must edit files in its worktree.
     last = Path(
         subprocess.run(["mktemp"], capture_output=True, text=True, check=True)
         .stdout.strip()
@@ -738,7 +740,7 @@ def run_codex(prompt: str, model: str, *, cwd: Optional[Path] = None,
     cmd = [
         "codex", "exec", "-m", model,
         "-c", f"model_reasoning_effort={CODEX_REASONING}",
-        "-s", "read-only", "--skip-git-repo-check",
+        "-s", sandbox, "--skip-git-repo-check",
         "-o", str(last), prompt,
     ]
     try:
@@ -929,6 +931,13 @@ def _slugify(text: str) -> str:
     return (s[:48] or "run")
 
 
+def _split_dest_url(owner: str, name: str) -> str:
+    """Canonical SSH remote for a GitHub owner/name. Pure (covered by
+    --self-test). In runner workspaces git rewrites git@github.com: to https so
+    the App-token credential helper serves the push."""
+    return f"git@github.com:{owner}/{name}.git"
+
+
 # --------------------------------------------------------------------------
 # stages 1-4
 # --------------------------------------------------------------------------
@@ -1054,6 +1063,18 @@ def git(*args: str, cwd: Optional[Path] = None, check: bool = True,
                           timeout=timeout)
 
 
+def gh(*args: str, check: bool = True,
+       timeout: int = 120) -> subprocess.CompletedProcess:
+    return subprocess.run(["gh", *args], cwd=str(REPO_ROOT),
+                          capture_output=True, text=True, check=check,
+                          timeout=timeout)
+
+
+def have_git_subtree() -> bool:
+    r = subprocess.run(["git", "subtree", "-h"], capture_output=True, text=True)
+    return "is not a git command" not in (r.stdout + r.stderr).lower()
+
+
 def parallel_bounded(thunks: list[Callable[[], T]], cap: int) -> list[T]:
     """Run thunks with at most `cap` concurrent, preserving order. Thunks must
     not raise (wrap failures into return values)."""
@@ -1061,9 +1082,21 @@ def parallel_bounded(thunks: list[Callable[[], T]], cap: int) -> list[T]:
         return list(ex.map(lambda t: t(), thunks))
 
 
+def localize_verify(cmd: str, repo_root: str, cwd: str) -> str:
+    """Point a verify command at the worktree it runs in. The consolidator is
+    told to write repo-relative commands, but a stray absolute repo-root path
+    (e.g. `cd /workspace/services/foo`) would otherwise check the host tree, not
+    the worker's worktree. Rewrite the repo root to the worktree so such a
+    command still verifies the right files. Pure (covered by --self-test)."""
+    if repo_root and repo_root != cwd and repo_root in cmd:
+        return cmd.replace(repo_root, cwd)
+    return cmd
+
+
 def run_verify(cmd: str, cwd: Path) -> tuple[Optional[int], str]:
     if not cmd.strip():
         return None, "(no verify command)"
+    cmd = localize_verify(cmd, str(REPO_ROOT), str(cwd))
     try:
         proc = subprocess.run(["bash", "-lc", cmd], cwd=str(cwd),
                               capture_output=True, text=True, env=child_env(),
@@ -1116,9 +1149,17 @@ def run_worker(run: Run, task: dict, base_ref: str, run_name: str,
                 boundaries=task.get("boundaries", ""),
                 output_format=task.get("output_format", ""), cwd=str(wt),
                 baseline=BASELINE_PROMPT)
-            res = run.record(run_claude(prompt, worker.model, cwd=wt,
-                                        permission_mode=WORKER_PERMISSION_MODE,
-                                        timeout=WORKER_TIMEOUT_S))
+            # Engine-agnostic: claude with auto-accepted edits, or codex with a
+            # writable sandbox. Either way the orchestrator (not the worker)
+            # commits the worktree below.
+            if worker.cli == "codex":
+                res = run.record(run_codex(prompt, worker.model, cwd=wt,
+                                           sandbox="workspace-write",
+                                           timeout=WORKER_TIMEOUT_S))
+            else:
+                res = run.record(run_claude(prompt, worker.model, cwd=wt,
+                                            permission_mode=WORKER_PERMISSION_MODE,
+                                            timeout=WORKER_TIMEOUT_S))
             result["summary"] = res.text[-2000:]
         else:
             result["summary"] = "(verify-only task: no files to edit)"
@@ -1168,38 +1209,16 @@ def run_worker(run: Run, task: dict, base_ref: str, run_name: str,
     return result
 
 
-def cmd_fanout(args: argparse.Namespace) -> int:
-    run = Run.open(Path(args.run))
-    if not run.has("tasks.json"):
-        raise SystemExit(f"no tasks.json in {run.path}; run `plan` first")
-    tasks = run.read_json("tasks.json")
+def execute_dag(run: Run, tasks: list[dict], worker_for: Callable[[str], Engine],
+                verifier: Engine, cap: int, keep_worktrees: bool) -> tuple[dict, str]:
+    """Execute a validated task DAG: topologically sort into waves, run each
+    wave's tasks concurrently in isolated worktrees (worker chosen per task by
+    worker_for(task_id)), verify, then reconcile committed worktrees onto an
+    integration branch in dependency order. Nothing touches the host branch.
+    Shared by fanout (constant worker) and fleet (round-robin pool). Returns
+    (report, integration_branch)."""
     by_id = {t["id"]: t for t in tasks}
     waves = plan_waves(tasks)
-
-    cfg = resolve_config({"intensity": args.intensity, "worker": args.worker,
-                          "verifier": args.verifier, "codex_effort": args.codex_effort,
-                          "max_workers": args.max_workers})
-    global CODEX_REASONING
-    CODEX_REASONING = cfg["codex_effort"]
-    worker = parse_engine_value(cfg["worker"])
-    verifier = parse_engine_value(cfg["verifier"])
-    if worker.cli != "claude":
-        raise SystemExit(f"workers must be claude:<model>, got {cfg['worker']!r} "
-                         "(codex workers are not yet supported)")
-    cores = max(1, (os.cpu_count() or 3) - 2)
-    cap = min(cfg["max_workers"], cores)
-
-    if args.estimate:
-        print(f"council fanout — {len(tasks)} tasks in {len(waves)} wave(s); "
-              f"intensity {cfg['intensity']}; worker {worker.label}; "
-              f"verifier {verifier.label}; concurrency {cap}")
-        for i, wave in enumerate(waves, 1):
-            print(f"  wave {i}: {', '.join(wave)}")
-        print("Each task spawns one worker + one verifier. Worktrees are "
-              "isolated; nothing is merged into your branch — results land on an "
-              "integration branch for review.")
-        return 0
-
     run_name = run.path.name
     base = git("rev-parse", "HEAD").stdout.strip()
     integ_branch = f"council/{run_name}/integration"
@@ -1208,7 +1227,7 @@ def cmd_fanout(args: argparse.Namespace) -> int:
     git("worktree", "remove", "--force", str(integ_wt), check=False)
     git("branch", "-D", integ_branch, check=False)
     git("worktree", "add", "--force", "-b", integ_branch, str(integ_wt), base)
-    log(f"fanout: {len(tasks)} task(s) in {len(waves)} wave(s); base {base[:8]}; "
+    log(f"exec: {len(tasks)} task(s) in {len(waves)} wave(s); base {base[:8]}; "
         f"integration branch {integ_branch}; concurrency {cap}")
 
     results: dict[str, dict] = {}
@@ -1216,11 +1235,11 @@ def cmd_fanout(args: argparse.Namespace) -> int:
         wave_base = git("rev-parse", "HEAD", cwd=integ_wt).stdout.strip()
         log(f"wave {wi}/{len(waves)}: {wave}  (base {wave_base[:8]})")
         thunks = [(lambda t=t: run_worker(run, by_id[t], wave_base, run_name,
-                                           worker, verifier))
+                                           worker_for(t), verifier))
                   for t in wave]
         for tid, res in zip(wave, parallel_bounded(thunks, cap)):
             results[tid] = res
-            log(f"  [{tid}] {res['status']}"
+            log(f"  [{tid}] {res['status']} ({res['model']})"
                 + (f" ({len(res.get('files_changed', []))} files)"
                    if res.get("committed") else ""))
         # reconcile this wave into the integration branch, in order
@@ -1238,7 +1257,7 @@ def cmd_fanout(args: argparse.Namespace) -> int:
             else:
                 res["merge"] = "ok"
 
-    if not args.keep_worktrees:
+    if not keep_worktrees:
         for tid in by_id:
             git("worktree", "remove", "--force", str(WT_ROOT / run_name / tid),
                 check=False)
@@ -1250,7 +1269,174 @@ def cmd_fanout(args: argparse.Namespace) -> int:
     s = report["summary"]
     log(f"done: {s['ok']}/{s['total']} ok, {s['failed']} failed, "
         f"{s['merged']} merged into {integ_branch}")
+    return report, integ_branch
+
+
+def cmd_fanout(args: argparse.Namespace) -> int:
+    run = Run.open(Path(args.run))
+    if not run.has("tasks.json"):
+        raise SystemExit(f"no tasks.json in {run.path}; run `plan` first")
+    tasks = run.read_json("tasks.json")
+    waves = plan_waves(tasks)
+
+    cfg = resolve_config({"intensity": args.intensity, "worker": args.worker,
+                          "verifier": args.verifier, "codex_effort": args.codex_effort,
+                          "max_workers": args.max_workers})
+    global CODEX_REASONING
+    CODEX_REASONING = cfg["codex_effort"]
+    worker = parse_engine_value(cfg["worker"])
+    verifier = parse_engine_value(cfg["verifier"])
+    cores = max(1, (os.cpu_count() or 3) - 2)
+    cap = min(cfg["max_workers"], cores)
+
+    if args.estimate:
+        print(f"council fanout — {len(tasks)} tasks in {len(waves)} wave(s); "
+              f"intensity {cfg['intensity']}; worker {worker.label}; "
+              f"verifier {verifier.label}; concurrency {cap}")
+        for i, wave in enumerate(waves, 1):
+            print(f"  wave {i}: {', '.join(wave)}")
+        print("Each task spawns one worker + one verifier. Worktrees are "
+              "isolated; nothing is merged into your branch — results land on an "
+              "integration branch for review.")
+        return 0
+
+    _report, integ_branch = execute_dag(run, tasks, lambda _tid: worker,
+                                        verifier, cap, args.keep_worktrees)
     print(integ_branch)  # stdout: integration branch for the host to surface
+    return 0
+
+
+def parse_agents_pool(spec: str) -> list[Engine]:
+    """Expand an agent-pool spec into an ordered list of engines. Grammar:
+    "<cli>:<model>[*<count>](,<cli>:<model>[*<count>])*", e.g.
+    "codex:gpt-5.5*3,claude:haiku*2" -> three codex + two claude engines. Pure
+    (covered by --self-test). Raises ValueError on a malformed spec."""
+    pool: list[Engine] = []
+    for raw in spec.split(","):
+        part = raw.strip()
+        if not part:
+            continue
+        engine_spec, star, count_s = part.partition("*")
+        cli, _, model = engine_spec.strip().partition(":")
+        if cli not in ("claude", "codex") or not model:
+            raise ValueError(f"agent must be claude:<model> or codex:<model>, "
+                             f"got {engine_spec.strip()!r}")
+        if star:
+            try:
+                count = int(count_s)
+            except ValueError as exc:
+                raise ValueError(f"bad count in agent spec {part!r}") from exc
+        else:
+            count = 1
+        if count <= 0:
+            raise ValueError(f"agent count must be >= 1 in {part!r}")
+        pool.extend(Engine(cli, model) for _ in range(count))
+    if not pool:
+        raise ValueError(f"empty agent pool from spec {spec!r}")
+    return pool
+
+
+def assign_agents(task_ids: list[str], pool: list[Engine]) -> dict[str, Engine]:
+    """Round-robin assign each task id to an engine from the pool. Pure."""
+    if not pool:
+        raise ValueError("cannot assign tasks to an empty agent pool")
+    return {tid: pool[i % len(pool)] for i, tid in enumerate(task_ids)}
+
+
+def cmd_fleet(args: argparse.Namespace) -> int:
+    tasks_path = Path(args.tasks)
+    if not tasks_path.exists():
+        raise SystemExit(f"tasks file not found: {tasks_path}")
+    tasks = json.loads(tasks_path.read_text())
+    validate_tasks(tasks)
+    waves = plan_waves(tasks)
+    pool = parse_agents_pool(args.agents)
+
+    cfg = resolve_config({"intensity": args.intensity, "verifier": args.verifier,
+                          "codex_effort": args.codex_effort,
+                          "max_workers": args.max_workers})
+    global CODEX_REASONING
+    CODEX_REASONING = cfg["codex_effort"]
+    verifier = parse_engine_value(cfg["verifier"])
+    cap = min(cfg["max_workers"], max(1, (os.cpu_count() or 3) - 2))
+    ordered_ids = [tid for wave in waves for tid in wave]
+    assignment = assign_agents(ordered_ids, pool)
+
+    if args.estimate:
+        print(f"council fleet — {len(tasks)} tasks in {len(waves)} wave(s); "
+              f"pool [{', '.join(e.label for e in pool)}]; "
+              f"verifier {verifier.label}; concurrency {cap}")
+        for i, wave in enumerate(waves, 1):
+            print(f"  wave {i}: "
+                  + ", ".join(f"{t}->{assignment[t].label}" for t in wave))
+        return 0
+
+    run = Run.create(f"fleet-{tasks_path.stem}", args.slug)
+    run.write_json("tasks.json", tasks)
+    run.set_state(stage="fleet", agents=[e.label for e in pool])
+    log(f"run dir: {run.path}")
+    _report, integ_branch = execute_dag(run, tasks, lambda tid: assignment[tid],
+                                        verifier, cap, args.keep_worktrees)
+    print(integ_branch)
+    return 0
+
+
+def cmd_split(args: argparse.Namespace) -> int:
+    """Carve a path subtree out into a new GitHub repo with its history
+    preserved (git subtree split). Never touches the host branch — it works on
+    a throwaway council/split/<name> branch."""
+    path = args.path.rstrip("/")
+    if not (REPO_ROOT / path).exists():
+        raise SystemExit(f"path not found in repo: {path}")
+    owner, sep, name = args.dest.partition("/")
+    if not sep or not owner or not name or "/" in name:
+        raise SystemExit(f"--dest must be owner/name, got {args.dest!r}")
+    if not have_git_subtree():
+        raise SystemExit("git subtree is unavailable; install git-subtree "
+                         "(git contrib / git-extras package)")
+    dest_url = _split_dest_url(owner, name)
+    branch = f"council/split/{_slugify(name)}"
+
+    if args.dry_run:
+        print(f"[dry-run] extract '{path}' into {owner}/{name}, history preserved:")
+        print(f"  git subtree split --prefix {path} -b {branch}")
+        if args.push:
+            print(f"  gh repo create {owner}/{name} --{args.visibility}   "
+                  "# if it does not already exist")
+            print(f"  git push {dest_url} {branch}:main")
+        print(f"  # then, as a separate change, optionally replace the in-repo "
+              f"copy:\n  #   git rm -r {path} && git submodule add {dest_url} {path}")
+        return 0
+
+    git("branch", "-D", branch, check=False)
+    log(f"splitting {path} -> {branch} (history-preserving)")
+    git("subtree", "split", "--prefix", path, "-b", branch, timeout=600)
+
+    if not args.push:
+        print(f"created local branch {branch} with the extracted history of "
+              f"{path}. Push it to a new repo when ready:")
+        print(f"  gh repo create {owner}/{name} --{args.visibility}")
+        print(f"  git push {dest_url} {branch}:main")
+        return 0
+
+    try:
+        if gh("repo", "view", f"{owner}/{name}", check=False).returncode == 0:
+            log(f"{owner}/{name} already exists; skipping create")
+        else:
+            log(f"creating {owner}/{name} ({args.visibility})")
+            gh("repo", "create", f"{owner}/{name}", f"--{args.visibility}")
+        log(f"pushing {branch} -> {dest_url}:main")
+        git("push", dest_url, f"{branch}:main")
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()[:300]
+        raise SystemExit(f"split push failed (branch {branch} kept for retry): "
+                         f"{detail}")
+    git("branch", "-D", branch, check=False)
+
+    print(f"extracted {path} into {owner}/{name} with history preserved.")
+    print("To replace the in-repo copy with a reference, in a separate change:")
+    print(f"  git rm -r {path}")
+    print(f"  git submodule add {dest_url} {path}")
     return 0
 
 
@@ -1455,9 +1641,6 @@ def coerce_config_value(key: str, raw: str):
         if ":" not in raw or raw.split(":", 1)[0] not in ("claude", "codex"):
             raise ValueError(f"{key} must be claude:<model> or codex:<model>, "
                              f"got {raw!r}")
-        if key == "worker" and not raw.startswith("claude:"):
-            raise ValueError("worker must be claude:<model> (codex workers "
-                             "are not yet supported)")
         return raw
     return raw
 
@@ -1613,9 +1796,43 @@ def cmd_self_test(_args: argparse.Namespace) -> int:
           _raises(lambda: merge_config({}, {"intensity": "nope"})))
     check("coerce rejects unknown key",
           _raises(lambda: coerce_config_value("bogus", "x")))
-    check("coerce rejects codex worker",
-          _raises(lambda: coerce_config_value("worker", "codex:gpt-5.5")))
+    check("coerce accepts codex worker",
+          coerce_config_value("worker", "codex:gpt-5.5") == "codex:gpt-5.5")
     check("coerce types ints", coerce_config_value("rounds", "3") == 3)
+
+    # parse_agents_pool + assign_agents (engine-agnostic fleet)
+    check("parse_agents_pool expands counts in order",
+          parse_agents_pool("codex:gpt-5.5*2,claude:haiku*1")
+          == [Engine("codex", "gpt-5.5"), Engine("codex", "gpt-5.5"),
+              Engine("claude", "haiku")])
+    check("parse_agents_pool defaults count to 1",
+          parse_agents_pool("claude:opus") == [Engine("claude", "opus")])
+    check("parse_agents_pool rejects zero count",
+          _raises(lambda: parse_agents_pool("codex:x*0")))
+    check("parse_agents_pool rejects unknown cli",
+          _raises(lambda: parse_agents_pool("ollama:x*1")))
+    check("parse_agents_pool rejects malformed spec",
+          _raises(lambda: parse_agents_pool("notvalid")))
+    check("assign_agents round-robins",
+          assign_agents(["t1", "t2", "t3"],
+                        [Engine("claude", "haiku"), Engine("codex", "gpt-5.5")])
+          == {"t1": Engine("claude", "haiku"),
+              "t2": Engine("codex", "gpt-5.5"),
+              "t3": Engine("claude", "haiku")})
+    check("assign_agents rejects empty pool",
+          _raises(lambda: assign_agents(["t1"], [])))
+
+    # split
+    check("_split_dest_url canonical ssh remote",
+          _split_dest_url("o", "n") == "git@github.com:o/n.git")
+
+    # localize_verify (verify runs in the worktree, not the host repo root)
+    check("localize_verify rewrites repo root to the worktree",
+          localize_verify("cd /workspace/services/foo && npm test",
+                          "/workspace", "/tmp/wt/T1")
+          == "cd /tmp/wt/T1/services/foo && npm test")
+    check("localize_verify leaves relative commands untouched",
+          localize_verify("npm test", "/workspace", "/tmp/wt/T1") == "npm test")
 
     print(f"\n{'PASS' if not failures else 'FAIL: ' + ', '.join(failures)}")
     return 1 if failures else 0
@@ -1659,7 +1876,7 @@ def build_parser() -> argparse.ArgumentParser:
     fo.add_argument("--max-workers", type=int, default=None,
                     help="override max concurrent workers (clamped to cores-2)")
     fo.add_argument("--worker", default=None,
-                    help="override worker model, form claude:model")
+                    help="override worker engine, form claude:model or codex:model")
     fo.add_argument("--verifier", default=None, help="override verifier, form cli:model")
     fo.add_argument("--codex-effort", default=None, choices=list(CODEX_EFFORTS),
                     help="override codex reasoning effort")
@@ -1668,6 +1885,41 @@ def build_parser() -> argparse.ArgumentParser:
     fo.add_argument("--estimate", action="store_true",
                     help="print the wave/worker plan and exit without spending")
     fo.set_defaults(func=cmd_fanout)
+
+    fl = sub.add_parser("fleet", help="run a task DAG against an ad-hoc, "
+                                      "engine-agnostic worker pool (no plan phase)")
+    fl.add_argument("--tasks", required=True,
+                    help="path to a tasks.json (any DAG; need not come from `plan`)")
+    fl.add_argument("--agents", required=True,
+                    help="pool spec, e.g. 'codex:gpt-5.5*3,claude:haiku*2' — "
+                         "round-robined across the tasks")
+    fl.add_argument("--verifier", default=None, help="override verifier, form cli:model")
+    fl.add_argument("--intensity", choices=list(PRESETS),
+                    help="preset (only its verifier/max-workers/codex-effort apply)")
+    fl.add_argument("--codex-effort", default=None, choices=list(CODEX_EFFORTS),
+                    help="codex reasoning effort for codex agents in the pool")
+    fl.add_argument("--max-workers", type=int, default=None,
+                    help="override max concurrent workers (clamped to cores-2)")
+    fl.add_argument("--keep-worktrees", action="store_true",
+                    help="keep per-task worktrees for inspection")
+    fl.add_argument("--slug", help="slug for the run dir name")
+    fl.add_argument("--estimate", action="store_true",
+                    help="print the pool/wave/assignment plan and exit")
+    fl.set_defaults(func=cmd_fleet)
+
+    sp = sub.add_parser("split", help="extract a path subtree into a new GitHub "
+                                      "repo, preserving that path's history")
+    sp.add_argument("--path", required=True,
+                    help="path under the repo to extract, e.g. services/foo")
+    sp.add_argument("--dest", required=True, help="new repo as owner/name")
+    sp.add_argument("--visibility", choices=["private", "public"],
+                    default="private", help="new repo visibility (default private)")
+    sp.add_argument("--no-push", dest="push", action="store_false",
+                    help="only create the local extracted branch; don't create "
+                         "or push the remote")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="print the commands and exit without touching anything")
+    sp.set_defaults(func=cmd_split, push=True)
 
     cf = sub.add_parser("config", help="show or change model/intensity config "
                                        "(council.toml)")
@@ -1738,23 +1990,30 @@ each. Do not merely pick one and discard the other; the best ideas are often
 split across both.
 
 # Task brief
+
 {{brief}}
 
 # Plan A (final)
+
 {{plan_a}}
 
 # Plan B (final)
+
 {{plan_b}}
 
 # Critique history (rounds 1-2, both directions)
+
 {{history}}
 
 # Repository
+
 Ground every task in the real codebase at {{repo_root}}. Do not invent paths.
 
 # Your job
+
 Produce (1) a clear consolidated plan in Markdown, and (2) a task DAG for
 parallel execution. Each task must:
+
 - be independently executable by a cheap worker agent given only its own fields,
 - touch a NON-OVERLAPPING set of files from every task it does not depend on
   (overlapping files across parallel tasks cause merge conflicts — partition the
@@ -1765,6 +2024,10 @@ parallel execution. Each task must:
   no markdown, no parenthetical asides. Chain steps with `&&`. Right:
   `python3 foo.py --version && python3 -m pytest -q`. Wrong:
   `run the script (expect "ok") and check it passes`.
+  The command runs from the ROOT of the worker's isolated worktree (a fresh
+  checkout of this repo), so use REPO-RELATIVE paths only — never an absolute
+  path and never `cd /abs/...`. Right: `cd services/foo && npm test`. Wrong:
+  `cd /workspace/services/foo && npm test`.
 - be tagged with a difficulty and a worker model (haiku for trivial/moderate,
   sonnet for hard).
 
@@ -1775,6 +2038,7 @@ should be a single task with a clear ordering, not forced into false parallelism
 {{baseline}}
 
 # Output
+
 Return ONLY a JSON object — no prose, no code fences — matching this schema:
 
 {{schema}}
@@ -2123,8 +2387,47 @@ python3 ~/.claude/skills/council/council.py config unset worker
 
 Per-role override flags: `--intensity`, `--rounds`, `--planner-a`, `--planner-b`,
 `--consolidator`, `--worker`, `--verifier`, `--codex-effort`, `--max-workers`.
-Precedence: intensity preset < `council.toml` < CLI flag. Workers must be
-`claude:<model>` (codex workers aren't supported yet).
+Precedence: intensity preset < `council.toml` < CLI flag. Every role — workers
+included — can be `claude:<model>` or `codex:<model>`, so a run can mix engines.
+
+## Fleet — ad-hoc, engine-agnostic worker pool
+
+`fleet` runs an existing task DAG against a declared pool of agents on either
+CLI, skipping the plan phase. Point it at any `tasks.json`, give it a pool, and
+tasks are round-robined across the pool, then verified and reconciled exactly
+like `fanout` (isolated worktrees, integration branch, your branch untouched).
+
+```bash
+python3 ~/.claude/skills/council/council.py fleet \
+  --tasks tasks.json --agents 'codex:gpt-5.5*3,claude:haiku*2'
+python3 ~/.claude/skills/council/council.py fleet \
+  --tasks tasks.json --agents 'claude:haiku*4' --estimate
+```
+
+The `--agents` spec is comma-separated `cli:model[*count]` entries (count
+defaults to 1). Use it to drive a mixed Claude+Codex fleet over a big,
+already-decomposed batch — e.g. cross-agent cleanups managed from either CLI.
+
+## split — extract a subtree into a new repo
+
+`split` carves a path out of the current repo into a brand-new GitHub repo with
+that path's history preserved (`git subtree split`). It works on a throwaway
+`council/split/<name>` branch and never touches your working branch.
+
+```bash
+# preview the exact commands, touch nothing:
+python3 ~/.claude/skills/council/council.py split \
+  --path services/foo --dest myorg/foo --dry-run
+# extract, create the (private) remote, push:
+python3 ~/.claude/skills/council/council.py split --path services/foo --dest myorg/foo
+# extract to a local branch only; push it yourself later:
+python3 ~/.claude/skills/council/council.py split --path services/foo --dest myorg/foo --no-push
+```
+
+`--visibility public` makes the new repo public. After extracting, it prints how
+to optionally replace the in-repo copy with a submodule in a separate change.
+The GitHub App must be installed on the destination owner for the push to
+authenticate.
 
 ## Notes
 
@@ -2205,7 +2508,39 @@ python3 ~/.codex/skills/council/council.py config set planner_b codex:gpt-5.5
 
 Override flags: `--intensity`, `--rounds`, `--planner-a`, `--planner-b`,
 `--consolidator`, `--worker`, `--verifier`, `--codex-effort`, `--max-workers`.
-Precedence: preset < council.toml < CLI flag. Workers must be `claude:<model>`.
+Precedence: preset < council.toml < CLI flag. Every role, workers included, can
+be `codex:<model>` or `claude:<model>`, so a run can mix engines.
+
+## Fleet — ad-hoc, engine-agnostic worker pool
+
+`fleet` runs an existing task DAG against a declared pool of agents on either
+CLI, with no plan phase. Point it at any `tasks.json` and a pool; tasks are
+round-robined across the pool, then verified and reconciled like `fanout`.
+
+```bash
+python3 ~/.codex/skills/council/council.py fleet \
+  --tasks tasks.json --agents 'codex:gpt-5.5*3,claude:haiku*2'
+python3 ~/.codex/skills/council/council.py fleet \
+  --tasks tasks.json --agents 'codex:gpt-5.5*4' --estimate
+```
+
+The `--agents` spec is comma-separated `cli:model[*count]` entries (count
+defaults to 1) — a mixed Codex+Claude fleet over an already-decomposed batch.
+
+## split — extract a subtree into a new repo
+
+`split` carves a path out of the current repo into a new GitHub repo with that
+path's history preserved (`git subtree split`), on a throwaway
+`council/split/<name>` branch; the working branch is untouched.
+
+```bash
+python3 ~/.codex/skills/council/council.py split \
+  --path services/foo --dest myorg/foo --dry-run
+python3 ~/.codex/skills/council/council.py split --path services/foo --dest myorg/foo
+```
+
+`--no-push` stops at the local branch; `--visibility public` for a public repo.
+The GitHub App must be installed on the destination owner for the push.
 
 Notes:
 
