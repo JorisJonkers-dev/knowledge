@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component
  * the row by id and layers chunks / embeddings / entities on top.
  *
  * Messages serialize through Spring's Jackson2JsonMessageConverter,
- * which the kotlin-common RabbitMqConfig already wires in.
+ * which kotlin-commons-messaging already wires in.
  */
 @Component
 class IngestPublisher(

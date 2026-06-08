@@ -7,7 +7,6 @@ WORKDIR /app
 # one of these files changes.
 COPY settings.gradle.kts build.gradle.kts gradle.properties* ./
 COPY gradle/ gradle/
-COPY libs/kotlin-common/build.gradle.kts libs/kotlin-common/
 COPY services/auth-api/build.gradle.kts services/auth-api/
 COPY services/assistant-api/build.gradle.kts services/assistant-api/
 COPY services/agent-gateway/build.gradle.kts services/agent-gateway/
@@ -23,7 +22,6 @@ RUN --mount=type=secret,id=github_token \
     gradle :services:knowledge-api:dependencies --no-daemon || true
 
 # Layer 2: source.
-COPY libs/kotlin-common/src/main/ libs/kotlin-common/src/main/
 COPY services/knowledge-api/src/main/ services/knowledge-api/src/main/
 RUN --mount=type=secret,id=github_token \
     --mount=type=secret,id=github_actor \

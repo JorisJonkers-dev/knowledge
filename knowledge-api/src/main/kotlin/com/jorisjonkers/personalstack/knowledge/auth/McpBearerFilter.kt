@@ -22,13 +22,13 @@ import org.springframework.web.filter.OncePerRequestFilter
  * transport-level disconnect.
  *
  * Declared as a plain class (no `@Component`) and registered as a
- * `@Bean` in `KnowledgeApiApplication`. kotlin-common's
+ * `@Bean` in `KnowledgeApiApplication`. kotlin-commons-observability's
  * `ApplicationTracingAspect` proxies every `@Component` with CGLIB,
  * which can't proxy `GenericFilterBean.init(FilterConfig)` (it's
  * final). The proxied init() left the inherited `logger` field null
  * and crashed Tomcat startup with
  * `Cannot invoke "Log.isDebugEnabled()" because "this.logger" is
- * null`. The kotlin-common timing filters use the same `@Bean`
+ * null`. The kotlin-commons-timing filters use the same `@Bean`
  * trick for the same reason.
  */
 class McpBearerFilter(

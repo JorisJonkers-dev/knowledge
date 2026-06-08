@@ -18,13 +18,13 @@ import org.springframework.scheduling.annotation.EnableScheduling
 @EnableConfigurationProperties(McpBearerProperties::class)
 @EnableScheduling
 class KnowledgeApiApplication {
-    // Plain bean instead of `@Component`: kotlin-common's
+    // Plain bean instead of `@Component`: kotlin-commons-observability's
     // `ApplicationTracingAspect` CGLIB-proxies every Spring stereotype
     // class under `com.jorisjonkers.personalstack..*`. The proxy can't
     // override `GenericFilterBean.init(FilterConfig)` (it's final), so
     // Tomcat boots the filter with a null inherited `logger` field and
     // NPEs on the first `isDebugEnabled()` call. `@Bean` declaration
-    // sidesteps the aspect entirely — same reason kotlin-common's
+    // sidesteps the aspect entirely — same reason kotlin-commons-timing's
     // `RequestTimingFilter` / `RequestPipelineSpanFilter` are wired
     // through `TimingAutoConfiguration` instead of `@Component`.
     @Bean

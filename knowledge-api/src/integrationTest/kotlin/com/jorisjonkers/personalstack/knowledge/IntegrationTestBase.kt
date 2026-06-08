@@ -45,11 +45,10 @@ abstract class IntegrationTestBase {
                 withPassword("kb_password")
             }
 
-        // kotlin-common's RabbitMqConfig boots even though knowledge-api
-        // 4a doesn't publish anything yet — the wildcard @ComponentScan
-        // picks it up. A real broker is the simplest way to keep the
-        // composite /actuator/health UP; spring-boot-starter-amqp also
-        // wires a RabbitHealthIndicator that would otherwise fail.
+        // kotlin-commons-messaging declares the shared RabbitMQ topology.
+        // A real broker is the simplest way to keep the composite
+        // /actuator/health UP; spring-boot-starter-amqp also wires a
+        // RabbitHealthIndicator that would otherwise fail.
         private val rabbitmq = RabbitMQContainer("rabbitmq:3-management-alpine")
 
         init {

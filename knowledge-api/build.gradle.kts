@@ -13,15 +13,16 @@ jooqCodegen {
 }
 
 dependencies {
-    implementation(project(":libs:kotlin-common"))
+    implementation(libs.kotlin.commons.messaging)
+    implementation(libs.kotlin.commons.observability)
+    implementation(libs.kotlin.commons.timing)
+    implementation(libs.kotlin.commons.web)
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
-    // kotlin-common ships a shared RabbitMqConfig that gets picked up by
-    // the wildcard @ComponentScan in every service application; pulling
-    // in the amqp starter is what makes its DirectExchange / Queue beans
-    // class-load. Phase 4c (queue publisher) is the consumer.
+    // kotlin-commons-messaging declares the shared user-registration
+    // topology when the AMQP starter provides RabbitTemplate.
     implementation("org.springframework.boot:spring-boot-starter-amqp")
-    // Spring AOP runtime for kotlin-common's ApplicationTracingAspect. Without
+    // Spring AOP runtime for kotlin-commons-observability's ApplicationTracingAspect. Without
     // these the @Aspect bean isn't proxied and the advice never fires; Spring
     // Boot 4 dropped the `spring-boot-starter-aop` shortcut so pull them
     // directly the same way auth-api does.
