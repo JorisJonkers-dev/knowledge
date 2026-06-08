@@ -45,16 +45,16 @@ dependencies {
     // and traces ship to Alloy → Tempo, with traceId/spanId on log lines.
     runtimeOnly("io.micrometer:micrometer-tracing-bridge-otel")
     runtimeOnly("io.opentelemetry:opentelemetry-exporter-otlp")
+    testImplementation(libs.kotlin.commons.test.support)
     testImplementation("org.testcontainers:testcontainers-postgresql")
     testImplementation("org.testcontainers:testcontainers-rabbitmq")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
 }
 
 // `integrationTest` runs the default-tag suite but skips the contract-
-// export tag — the spec dump is a build-time artefact, not a
-// verification step. `exportOpenApiSpec` runs only the export test and
-// writes the spec to disk for the knowledge-ui contract:generate
-// pipeline. Same shape assistant-api uses.
+// export tag. The spec dump is a build-time artefact, not a routine
+// integration verification step. `exportOpenApiSpec` runs only the springdoc
+// MVC slice export test and writes the spec to disk for the drift gate.
 tasks.named<Test>("integrationTest") {
     useJUnitPlatform {
         includeTags("integration")
@@ -63,7 +63,7 @@ tasks.named<Test>("integrationTest") {
 }
 
 tasks.register<Test>("exportOpenApiSpec") {
-    description = "Boots the Spring context and writes the OpenAPI spec to services/knowledge-api/openapi.json"
+    description = "Exports the OpenAPI spec to services/knowledge-api/openapi.json from a springdoc MVC slice"
     group = "documentation"
     testClassesDirs = sourceSets["integrationTest"].output.classesDirs
     classpath = sourceSets["integrationTest"].runtimeClasspath

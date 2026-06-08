@@ -1,65 +1,76 @@
 package com.jorisjonkers.personalstack.knowledge.contract
 
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.databind.SerializationFeature
-import com.jorisjonkers.personalstack.knowledge.IntegrationTestBase
-import org.junit.jupiter.api.BeforeEach
+import com.jorisjonkers.personalstack.common.test.openapi.OpenApiSliceExporter
+import com.jorisjonkers.personalstack.common.test.openapi.OpenApiWebMvcSliceConfiguration
+import com.jorisjonkers.personalstack.knowledge.audit.AuditService
+import com.jorisjonkers.personalstack.knowledge.discovery.DiscoveryService
+import com.jorisjonkers.personalstack.knowledge.discovery.TagClusterService
+import com.jorisjonkers.personalstack.knowledge.installer.InstallerController
+import com.jorisjonkers.personalstack.knowledge.mcp.McpController
+import com.jorisjonkers.personalstack.knowledge.mcp.McpPrompts
+import com.jorisjonkers.personalstack.knowledge.mcp.McpTools
+import com.jorisjonkers.personalstack.knowledge.recall.RecallService
+import com.jorisjonkers.personalstack.knowledge.review.ReviewService
+import com.jorisjonkers.personalstack.knowledge.web.KnowledgeAuditController
+import com.jorisjonkers.personalstack.knowledge.web.KnowledgeDiscoveryController
+import com.jorisjonkers.personalstack.knowledge.web.KnowledgeReadController
+import com.jorisjonkers.personalstack.knowledge.web.KnowledgeReviewController
+import io.mockk.mockk
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.SpringBootConfiguration
+import org.springframework.boot.test.context.TestConfiguration
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
+import org.springframework.context.annotation.Bean
+import org.springframework.test.context.ContextConfiguration
 import org.springframework.test.web.servlet.MockMvc
-import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
-import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
-import org.springframework.test.web.servlet.setup.MockMvcBuilders
-import org.springframework.web.context.WebApplicationContext
-import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 
-// Pinned contract: hitting /api/v1/api-docs in a fully-booted Spring
-// context produces the OpenAPI spec checked into the repo. The
-// `exportOpenApiSpec` Gradle task runs only this tag and writes the
-// JSON output to services/knowledge-api/openapi.json. The regular
-// `integrationTest` task excludes the tag so it never runs as part of
-// the normal pipeline — booting the container, hitting the endpoint,
-// and dumping the file is fast but pointless during routine CI.
-//
-// Mirror of services/assistant-api/.../OpenApiSpecExportTest.kt.
+// Pinned contract: hitting /api/v1/api-docs in the springdoc MVC slice
+// produces the OpenAPI spec checked into the repo. The `exportOpenApiSpec`
+// Gradle task runs only this tag and writes the JSON output to
+// services/knowledge-api/openapi.json.
 @Tag("contract-export")
-class OpenApiSpecExportTest : IntegrationTestBase() {
+@WebMvcTest(
+    controllers = [
+        InstallerController::class,
+        KnowledgeAuditController::class,
+        KnowledgeDiscoveryController::class,
+        KnowledgeReadController::class,
+        McpController::class,
+        KnowledgeReviewController::class,
+    ],
+    properties = [
+        "spring.jackson.property-naming-strategy=SNAKE_CASE",
+        "springdoc.api-docs.path=/api/v1/api-docs",
+        "springdoc.writer-with-default-pretty-printer=true",
+        "springdoc.writer-with-order-by-keys=true",
+    ],
+)
+@AutoConfigureMockMvc(addFilters = false)
+@ContextConfiguration(
+    classes = [
+        OpenApiSpecExportTest.Application::class,
+        OpenApiSpecExportTest.Collaborators::class,
+        OpenApiWebMvcSliceConfiguration::class,
+        InstallerController::class,
+        KnowledgeAuditController::class,
+        KnowledgeDiscoveryController::class,
+        KnowledgeReadController::class,
+        KnowledgeReviewController::class,
+        McpController::class,
+    ],
+)
+class OpenApiSpecExportTest {
     @Autowired
-    private lateinit var webApplicationContext: WebApplicationContext
-
     private lateinit var mockMvc: MockMvc
-
-    @BeforeEach
-    fun setUp() {
-        mockMvc = MockMvcBuilders.webAppContextSetup(webApplicationContext).build()
-    }
 
     @Test
     fun `export OpenAPI spec to repo root`() {
-        val result =
-            mockMvc
-                .perform(get("/api/v1/api-docs"))
-                .andExpect(status().isOk)
-                .andReturn()
-
-        val raw = result.response.contentAsString
-        // Round-trip through Jackson so the on-disk JSON is pretty-printed
-        // with the project's standard sort order — keeps diffs reviewable
-        // when the spec changes intentionally.
-        val mapper =
-            ObjectMapper().apply {
-                enable(SerializationFeature.INDENT_OUTPUT)
-                enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
-            }
-        val tree = mapper.readTree(raw)
-        val pretty = mapper.writeValueAsString(tree) + "\n"
-
-        val outputPath = resolveOpenApiSpecPath()
-        Files.createDirectories(outputPath.parent)
-        Files.writeString(outputPath, pretty)
+        OpenApiSliceExporter.writeJson(mockMvc, resolveOpenApiSpecPath(), "/api/v1/api-docs")
     }
 
     private fun resolveOpenApiSpecPath(): Path {
@@ -71,5 +82,32 @@ class OpenApiSpecExportTest : IntegrationTestBase() {
             return Paths.get(override)
         }
         return Paths.get(System.getProperty("user.dir")).resolve("openapi.json")
+    }
+
+    @SpringBootConfiguration
+    class Application
+
+    @TestConfiguration(proxyBeanMethods = false)
+    class Collaborators {
+        @Bean
+        fun auditService(): AuditService = mockk(relaxed = true)
+
+        @Bean
+        fun discoveryService(): DiscoveryService = mockk(relaxed = true)
+
+        @Bean
+        fun mcpPrompts(): McpPrompts = mockk(relaxed = true)
+
+        @Bean
+        fun mcpTools(): McpTools = mockk(relaxed = true)
+
+        @Bean
+        fun recallService(): RecallService = mockk(relaxed = true)
+
+        @Bean
+        fun reviewService(): ReviewService = mockk(relaxed = true)
+
+        @Bean
+        fun tagClusterService(): TagClusterService = mockk(relaxed = true)
     }
 }
