@@ -32,7 +32,7 @@ dependencies {
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("org.springframework.boot:spring-boot-starter-jooq")
     implementation("org.jooq:jooq")
-    implementation("tools.jackson.module:jackson-module-kotlin:3.1.3")
+    implementation("tools.jackson.module:jackson-module-kotlin:3.1.4")
     // Springdoc publishes `/api/v1/api-docs` (OpenAPI 3 JSON) over the
     // committed REST controllers under `web/`. The committed
     // `services/knowledge-api/openapi.json` is the contract knowledge-ui
