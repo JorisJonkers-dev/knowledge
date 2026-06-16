@@ -639,6 +639,24 @@
         "tags" : [ "knowledge-discovery-controller" ]
       }
     },
+    "/install-agents.sh" : {
+      "get" : {
+        "operationId" : "installAgentsSh",
+        "responses" : {
+          "200" : {
+            "content" : {
+              "text/x-shellscript;charset=UTF-8" : {
+                "schema" : {
+                  "type" : "string"
+                }
+              }
+            },
+            "description" : "OK"
+          }
+        },
+        "tags" : [ "installer-controller" ]
+      }
+    },
     "/install.sh" : {
       "get" : {
         "operationId" : "installSh",

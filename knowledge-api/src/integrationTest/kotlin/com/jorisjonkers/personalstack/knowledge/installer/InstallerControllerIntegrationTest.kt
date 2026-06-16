@@ -74,4 +74,24 @@ class InstallerControllerIntegrationTest : IntegrationTestBase() {
         assertThat(body).contains("KB_DIGEST_DEDUPE_SCORE")
         assertThat(body).contains("KB_MCP_URL")
     }
+
+    @Test
+    fun `install-agents_sh serves a bash script templated with the configured kb url`() {
+        val result = mockMvc.get("/install-agents.sh").andReturn()
+
+        assertThat(result.response.status).isEqualTo(200)
+        assertThat(result.response.contentType).startsWith("text/x-shellscript")
+
+        val body = result.response.contentAsString
+        assertThat(body).startsWith("#!/usr/bin/env bash")
+        assertThat(body).contains("https://kb.example.test")
+        assertThat(body).doesNotContain("@KB_URL@")
+        assertThat(body).doesNotContain("@VERSION@")
+        // This installer is a thin wrapper that delegates the base
+        // install by fetching the sibling install.sh from the same KB.
+        assertThat(body).contains("/install.sh")
+        // The new capability over the base installer: registering the
+        // knowledge MCP server with each agent.
+        assertThat(body).contains("mcp_servers.knowledge")
+    }
 }
