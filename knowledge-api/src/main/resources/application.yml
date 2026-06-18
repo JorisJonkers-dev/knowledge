@@ -105,6 +105,11 @@ springdoc:
     path: /api/v1/swagger-ui.html
 
 knowledge:
+  # `full` (default) exposes the complete curator MCP surface; `lite`
+  # registers only recall + capture and drops the curator-governance
+  # tools (discovery, admin, digest, audit, review) for a thin
+  # low-maintenance recall+capture service. Reversible via config.
+  mode: ${KNOWLEDGE_MODE:full}
   recall:
     # Default mode for `knowledge.recall`. `fast` = FTS-only, `hybrid`
     # = FTS + pgvector + RRF fusion, `deep` = hybrid + optional

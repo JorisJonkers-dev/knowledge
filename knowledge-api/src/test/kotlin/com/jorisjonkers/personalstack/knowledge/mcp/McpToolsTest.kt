@@ -98,6 +98,38 @@ class McpToolsTest {
             at = Instant.parse("2026-05-19T13:00:00Z"),
         )
 
+    private fun liteTools() =
+        McpTools(
+            CaptureMcpTools(captureService),
+            ReadMcpTools(recallService),
+            DiscoveryMcpTools(discoveryService, tagClusterService),
+            AdminMcpTools(topicRepository, noteRepository, auditRepository, adminAuthorization),
+            DigestMcpTools(digestService),
+            AuditMcpTools(auditService),
+            ReviewMcpTools(reviewService),
+            KnowledgeModeProperties(mode = KnowledgeMode.LITE),
+        )
+
+    @Test
+    fun `lite mode registers only recall and capture, dropping curator-governance tools`() {
+        val names = liteTools().describe().map { it["name"] as String }
+
+        assertThat(names).contains(
+            "knowledge.recall",
+            "knowledge.get_note",
+            "knowledge.capture_lesson",
+            "knowledge.ingest_note",
+        )
+        assertThat(names).doesNotContain(
+            "knowledge.list_topics",
+            "knowledge.add_topic",
+            "knowledge.digest_transcript",
+            "knowledge.list_audit",
+            "knowledge.review_summary",
+            "knowledge.list_tag_candidates",
+        )
+    }
+
     @Test
     fun `describe advertises capture, read, discovery, admin, digest, and audit tools by name`() {
         val names = tools.describe().map { it["name"] as String }

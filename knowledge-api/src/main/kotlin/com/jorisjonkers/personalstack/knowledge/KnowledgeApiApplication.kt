@@ -2,6 +2,7 @@ package com.jorisjonkers.personalstack.knowledge
 
 import com.jorisjonkers.personalstack.knowledge.auth.McpBearerFilter
 import com.jorisjonkers.personalstack.knowledge.auth.McpBearerProperties
+import com.jorisjonkers.personalstack.knowledge.mcp.KnowledgeModeProperties
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.runApplication
@@ -15,7 +16,7 @@ import org.springframework.scheduling.annotation.EnableScheduling
 // boot and a node coming back online would never get picked up
 // without a pod restart.
 @SpringBootApplication(scanBasePackages = ["com.jorisjonkers.personalstack"])
-@EnableConfigurationProperties(McpBearerProperties::class)
+@EnableConfigurationProperties(McpBearerProperties::class, KnowledgeModeProperties::class)
 @EnableScheduling
 class KnowledgeApiApplication {
     // Plain bean instead of `@Component`: kotlin-commons-observability's

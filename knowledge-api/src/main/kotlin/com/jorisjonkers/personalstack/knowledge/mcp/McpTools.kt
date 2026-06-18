@@ -18,17 +18,23 @@ class McpTools(
     digestTools: DigestMcpTools,
     auditTools: AuditMcpTools,
     reviewTools: ReviewMcpTools,
+    modeProperties: KnowledgeModeProperties = KnowledgeModeProperties(),
 ) {
     private val tools: Map<String, McpTool> =
-        (
-            captureTools.tools() +
-                readTools.tools() +
-                discoveryTools.tools() +
-                adminTools.tools() +
-                digestTools.tools() +
-                auditTools.tools() +
-                reviewTools.tools()
-        ).associateBy { it.name }
+        buildList {
+            // Core retrieval + capture surface — always registered.
+            addAll(captureTools.tools())
+            addAll(readTools.tools())
+            // Curator-governance surface — only in full mode. `lite` keeps a
+            // thin recall+capture service (the lightweight-memory target).
+            if (modeProperties.mode == KnowledgeMode.FULL) {
+                addAll(discoveryTools.tools())
+                addAll(adminTools.tools())
+                addAll(digestTools.tools())
+                addAll(auditTools.tools())
+                addAll(reviewTools.tools())
+            }
+        }.associateBy { it.name }
 
     fun describe(): List<Map<String, Any?>> = tools.values.map { it.descriptor }
 
