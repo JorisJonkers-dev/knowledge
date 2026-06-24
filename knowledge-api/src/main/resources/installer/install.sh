@@ -305,10 +305,12 @@ if isinstance(messages, list) and messages:
 # Skip trivially-short prompts — overhead > value.
 [ "${#prompt}" -lt "${KB_RECALL_MIN_PROMPT_CHARS:-40}" ] && exit 0
 
-# Scope recall to the current repo when running inside a git checkout.
-project="$(git remote get-url origin 2>/dev/null | sed -e 's#\.git$##' -e 's#.*[/:]##')"
-[ -n "${project}" ] || project="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
-scope="${KB_RECALL_SCOPE:-project:${project}}"
+# Recall spans every curated scope by default (empty scope => the server's
+# curated default, which is all real scopes minus _inbox). This avoids a
+# repo-split (e.g. project:agents vs project:personal-stack) silently hiding
+# knowledge about the same subsystem. Set KB_RECALL_SCOPE to narrow back to
+# a single scope when a repo wants project-local recall.
+scope="${KB_RECALL_SCOPE:-}"
 
 # Adaptive mode: short prompts rarely need semantic search.
 prompt_len="${#prompt}"
@@ -4157,11 +4159,11 @@ marker="${STATE_DIR}/sessions/${session}/edit-$(printf '%s' "${file_path}" | sha
 [ -e "${marker}" ] && exit 0
 : > "${marker}"
 
-# Scope to the current repo and query by filename + parent + path; this
-# keeps automatic edit recall focused while still giving FTS enough terms.
-project="$(git remote get-url origin 2>/dev/null | sed -e 's#\.git$##' -e 's#.*[/:]##')"
-[ -n "${project}" ] || project="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
-scope="${KB_RECALL_SCOPE:-project:${project}}"
+# Span every curated scope by default (empty => server's curated default, all
+# real scopes minus _inbox) so a repo split can't hide edit-relevant knowledge;
+# query by filename + parent + path to give FTS enough terms. Set
+# KB_RECALL_SCOPE to narrow back to a single scope for project-local recall.
+scope="${KB_RECALL_SCOPE:-}"
 
 basename=$(basename "${file_path}")
 parent=$(basename "$(dirname "${file_path}")")
