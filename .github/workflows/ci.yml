@@ -84,17 +84,18 @@ jobs:
           BASE_REF: ${{ github.base_ref || 'main' }}
         run: |
           set -euo pipefail
+          mkdir -p .contract
           git fetch --depth=1 origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
           if git cat-file -e "origin/$BASE_REF:client-spec/openapi/knowledge-api.json"; then
-            git show "origin/$BASE_REF:client-spec/openapi/knowledge-api.json" > /tmp/base-knowledge-api.json
+            git show "origin/$BASE_REF:client-spec/openapi/knowledge-api.json" > .contract/base-knowledge-api.json
           else
-            git show "origin/$BASE_REF:knowledge-api/openapi.json" > /tmp/base-knowledge-api.json
+            git show "origin/$BASE_REF:knowledge-api/openapi.json" > .contract/base-knowledge-api.json
           fi
 
       - name: Check breaking OpenAPI changes
         uses: oasdiff/oasdiff-action/breaking@v0
         with:
-          base: /tmp/base-knowledge-api.json
+          base: .contract/base-knowledge-api.json
           revision: client-spec/openapi/knowledge-api.json
           fail-on: WARN
 
