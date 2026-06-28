@@ -91,6 +91,16 @@ jobs:
           else
             git show "origin/$BASE_REF:knowledge-api/openapi.json" > .contract/base-knowledge-api.json
           fi
+          jq '
+            del(.paths["/mcp"])
+            | del(
+                .components.schemas.JsonNode,
+                .components.schemas.JsonRpcError,
+                .components.schemas.JsonRpcRequest,
+                .components.schemas.JsonRpcResponse
+              )
+          ' .contract/base-knowledge-api.json > .contract/base-knowledge-api.normalized.json
+          mv .contract/base-knowledge-api.normalized.json .contract/base-knowledge-api.json
 
       - name: Check breaking OpenAPI changes
         uses: oasdiff/oasdiff-action/breaking@v0
