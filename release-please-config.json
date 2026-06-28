@@ -8,14 +8,7 @@
       "include-component-in-tag": false,
       "bump-minor-pre-major": true,
       "draft": false,
-      "prerelease": false,
-      "extra-files": [
-        {
-          "type": "json",
-          "path": "clients/typescript/package.json",
-          "jsonpath": "$.version"
-        }
-      ]
+      "prerelease": false
     }
   }
 }

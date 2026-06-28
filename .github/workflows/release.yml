@@ -71,48 +71,24 @@ jobs:
             github_token=${{ github.token }}
             github_actor=${{ github.actor }}
 
-  publish-maven:
-    name: Publish Maven Clients
+  publish-api-clients:
+    name: Publish API Clients
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Publish JVM clients
-        env:
-          GITHUB_ACTOR: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./gradlew :clients:java:publish :clients:kotlin:publish --no-daemon --no-parallel --max-workers=1
-
-  publish-npm:
-    name: Publish TypeScript Client
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          registry-url: https://npm.pkg.github.com
-          scope: '@jorisjonkers-dev'
-          cache: pnpm
-
-      - name: Enable pnpm
-        run: corepack enable
-
-      - name: Publish package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm --filter @jorisjonkers-dev/knowledge-api-client generate
-          pnpm --filter @jorisjonkers-dev/knowledge-api-client build
-          pnpm --filter @jorisjonkers-dev/knowledge-api-client publish --no-git-checks --access public
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/publish-api-clients.yml@v0.7.0
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    with:
+      spec-path: client-spec/openapi/knowledge-api.json
+      api-name: knowledge-api
+      version: ${{ needs.release-please.outputs.tag_name }}
+      ts-package: "@jorisjonkers-dev/knowledge-api-client"
+      maven-group: dev.jorisjonkers
+      java-artifact: knowledge-api-client-java
+      kotlin-artifact: knowledge-api-client-kotlin
+      dry-run: false
+    secrets:
+      packages-token: ${{ secrets.GITHUB_TOKEN }}
+      node-auth-token: ${{ secrets.GITHUB_TOKEN }}

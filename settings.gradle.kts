@@ -18,31 +18,12 @@ pluginManagement {
                         .orNull
             }
         }
-        maven {
-            name = "JorisJonkersDevOpenApiClientGradle"
-            url = uri("https://maven.pkg.github.com/JorisJonkers-dev/openapi-client-gradle")
-            credentials {
-                username =
-                    providers
-                        .gradleProperty("gpr.user")
-                        .orElse(providers.environmentVariable("GITHUB_ACTOR"))
-                        .orNull
-                password =
-                    providers
-                        .gradleProperty("gpr.token")
-                        .orElse(providers.environmentVariable("GITHUB_TOKEN"))
-                        .orNull
-            }
-        }
     }
     resolutionStrategy {
         eachPlugin {
             val id = requested.id.id
-            if (id.startsWith("dev.jorisjonkers.") && id != "dev.jorisjonkers.openapi-client") {
+            if (id.startsWith("dev.jorisjonkers.")) {
                 useModule("dev.jorisjonkers:gradle-conventions-${id.removePrefix("dev.jorisjonkers.")}:${requested.version}")
-            }
-            if (id == "dev.jorisjonkers.openapi-client") {
-                useModule("dev.jorisjonkers:openapi-client-gradle:${requested.version}")
             }
         }
     }
@@ -77,4 +58,4 @@ dependencyResolutionManagement {
     }
 }
 
-include(":api", ":client-spec", ":clients:java", ":clients:kotlin")
+include(":api", ":client-spec")

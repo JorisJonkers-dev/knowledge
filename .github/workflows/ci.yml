@@ -90,36 +90,22 @@ jobs:
 
   client-dry-run:
     name: Client Dry Run
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10.25.0
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          cache: pnpm
-
-      - name: Build JVM clients
-        env:
-          GITHUB_ACTOR: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./gradlew :client-spec:check :clients:java:build :clients:kotlin:build publishToMavenLocal --no-daemon
-
-      - name: Build TypeScript client
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm --filter @jorisjonkers-dev/knowledge-api-client generate
-          pnpm --filter @jorisjonkers-dev/knowledge-api-client build
-          pnpm --filter @jorisjonkers-dev/knowledge-api-client pack:dry-run
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/publish-api-clients.yml@v0.7.0
+    permissions:
+      contents: read
+      packages: read
+    with:
+      spec-path: client-spec/openapi/knowledge-api.json
+      api-name: knowledge-api
+      version: 0.0.0-ci.${{ github.run_number }}.${{ github.run_attempt }}
+      ts-package: "@jorisjonkers-dev/knowledge-api-client"
+      maven-group: dev.jorisjonkers
+      java-artifact: knowledge-api-client-java
+      kotlin-artifact: knowledge-api-client-kotlin
+      dry-run: true
+    secrets:
+      packages-token: ${{ secrets.GITHUB_TOKEN }}
+      node-auth-token: ${{ secrets.GITHUB_TOKEN }}
 
   docker:
     name: Docker Dry Run

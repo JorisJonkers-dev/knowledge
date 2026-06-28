@@ -10,8 +10,6 @@ COPY gradle/ gradle/
 COPY api/build.gradle.kts api/
 COPY client-spec/build.gradle.kts client-spec/
 COPY client-spec/openapi/ client-spec/openapi/
-COPY clients/java/build.gradle.kts clients/java/
-COPY clients/kotlin/build.gradle.kts clients/kotlin/
 
 RUN --mount=type=secret,id=github_token \
     --mount=type=secret,id=github_actor \

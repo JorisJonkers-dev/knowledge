@@ -1,7 +1,6 @@
 [versions]
 jorisjonkers-commons = "0.7.0"
 jorisjonkers-conventions = "0.5.0"
-openapi-client-gradle = "0.3.0"
 
 [libraries]
 kotlin-commons-archunit-test = { module = "dev.jorisjonkers:kotlin-commons-archunit-test", version.ref = "jorisjonkers-commons" }
@@ -26,4 +25,3 @@ jorisjonkers-spring = { id = "dev.jorisjonkers.spring", version.ref = "jorisjonk
 jorisjonkers-testing = { id = "dev.jorisjonkers.testing", version.ref = "jorisjonkers-conventions" }
 jorisjonkers-test-logging = { id = "dev.jorisjonkers.test-logging", version.ref = "jorisjonkers-conventions" }
 jorisjonkers-jooq-codegen = { id = "dev.jorisjonkers.jooq-codegen", version.ref = "jorisjonkers-conventions" }
-jorisjonkers-openapi-client = { id = "dev.jorisjonkers.openapi-client", version.ref = "openapi-client-gradle" }
