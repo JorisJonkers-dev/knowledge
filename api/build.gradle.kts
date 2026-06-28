@@ -1,3 +1,5 @@
+import org.gradle.testing.jacoco.plugins.JacocoTaskExtension
+
 plugins {
     alias(libs.plugins.jorisjonkers.spring)
     alias(libs.plugins.jorisjonkers.detekt)
@@ -25,6 +27,7 @@ dependencies {
     implementation(libs.kotlin.commons.web)
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
+    implementation("org.springframework.boot:spring-boot-starter-validation")
     // kotlin-commons-messaging declares the shared user-registration
     // topology when the AMQP starter provides RabbitTemplate.
     implementation("org.springframework.boot:spring-boot-starter-amqp")
@@ -82,6 +85,9 @@ tasks.register<Test>("exportOpenApiSpec") {
             .file("client-spec/openapi/knowledge-api.json")
             .asFile.absolutePath,
     )
+    extensions.configure<JacocoTaskExtension> {
+        isEnabled = false
+    }
     // Always re-run: the spec is derived from the live springdoc output,
     // so caching past runs would defeat the drift gate. The CI workflow
     // diffs the freshly-written file against the committed copy.

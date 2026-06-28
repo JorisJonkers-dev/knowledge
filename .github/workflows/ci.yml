@@ -58,6 +58,9 @@ jobs:
   contract:
     name: Contract Drift
     runs-on: ubuntu-latest
+    env:
+      GITHUB_ACTOR: ${{ github.actor }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -76,21 +79,28 @@ jobs:
           export-command: ./gradlew :api:exportOpenApiSpec --no-daemon
           guidance: ./gradlew :api:exportOpenApiSpec
 
-      - name: Fetch base contract
+      - name: Prepare base contract
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
-        run: git fetch --depth=1 origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+          if git cat-file -e "origin/$BASE_REF:client-spec/openapi/knowledge-api.json"; then
+            git show "origin/$BASE_REF:client-spec/openapi/knowledge-api.json" > /tmp/base-knowledge-api.json
+          else
+            git show "origin/$BASE_REF:knowledge-api/openapi.json" > /tmp/base-knowledge-api.json
+          fi
 
       - name: Check breaking OpenAPI changes
         uses: oasdiff/oasdiff-action/breaking@v0
         with:
-          base: origin/${{ github.base_ref || 'main' }}:client-spec/openapi/knowledge-api.json
-          revision: HEAD:client-spec/openapi/knowledge-api.json
+          base: /tmp/base-knowledge-api.json
+          revision: client-spec/openapi/knowledge-api.json
           fail-on: WARN
 
   client-dry-run:
     name: Client Dry Run
-    uses: JorisJonkers-dev/github-workflows/.github/workflows/publish-api-clients.yml@v0.7.1
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/publish-api-clients.yml@v0.7.2
     permissions:
       contents: read
       packages: write
