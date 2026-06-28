@@ -90,7 +90,7 @@ jobs:
 
   client-dry-run:
     name: Client Dry Run
-    uses: JorisJonkers-dev/github-workflows/.github/workflows/publish-api-clients.yml@v0.7.0
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/publish-api-clients.yml@v0.7.1
     permissions:
       contents: read
       packages: write
@@ -143,8 +143,8 @@ jobs:
     name: Migration Guard
     uses: JorisJonkers-dev/github-workflows/.github/workflows/migration-guard.yml@v0.6.1
     with:
-      migration-regex: api/src/main/resources/db/migration(-pg)?/V[0-9][^/]*\.sql$
-      scope-regex: (api)/.*
+      migration-regex: api/src/main/resources/db/migration(-pg)?/V(1[3-9]|[2-9][0-9]|[1-9][0-9]{2,})[^/]*\.sql$
+      scope-regex: (api/src/main/resources/db)/.*
 
   pipeline-complete:
     name: Pipeline Complete

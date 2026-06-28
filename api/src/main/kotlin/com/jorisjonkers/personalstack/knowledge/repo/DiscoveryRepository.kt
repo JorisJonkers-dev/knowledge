@@ -171,17 +171,19 @@ class DiscoveryRepository(
                     max(KB_NOTES.CAPTURED_AT),
                 ).from(KB_NOTES)
                 .where(KB_NOTES.SCOPE.eq(scope))
-                .fetchOne() ?: return null
-        val noteCount = agg.value1() ?: 0
-        if (noteCount == 0) return null
-        return TopicStats(
-            slug = slug,
-            noteCount = noteCount,
-            firstCapturedAt = agg.value2()?.toInstant(ZoneOffset.UTC),
-            lastCapturedAt = agg.value3()?.toInstant(ZoneOffset.UTC),
-            typeBreakdown = typeBreakdownFor(scope),
-            topTags = topTagsFor(scope, topTagLimit),
-        )
+                .fetchOne()
+        return agg?.let { row ->
+            (row.value1() ?: 0).takeIf { it > 0 }?.let { noteCount ->
+                TopicStats(
+                    slug = slug,
+                    noteCount = noteCount,
+                    firstCapturedAt = row.value2()?.toInstant(ZoneOffset.UTC),
+                    lastCapturedAt = row.value3()?.toInstant(ZoneOffset.UTC),
+                    typeBreakdown = typeBreakdownFor(scope),
+                    topTags = topTagsFor(scope, topTagLimit),
+                )
+            }
+        }
     }
 
     private fun typeBreakdownFor(scope: String): Map<String, Int> =

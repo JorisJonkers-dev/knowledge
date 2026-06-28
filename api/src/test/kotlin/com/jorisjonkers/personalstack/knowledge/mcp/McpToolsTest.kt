@@ -42,6 +42,7 @@ import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.KotlinModule
 import java.time.Instant
 
+@Suppress("LargeClass")
 class McpToolsTest {
     private val captureService = mockk<CaptureService>()
     private val recallService = mockk<RecallService>(relaxed = true)
@@ -165,6 +166,7 @@ class McpToolsTest {
     }
 
     @Test
+    @Suppress("LongMethod")
     fun `review_summary forwards bounded request and projects governance buckets`() {
         val request = slot<ReviewSummaryRequest>()
         every { reviewService.summary(capture(request)) } returns

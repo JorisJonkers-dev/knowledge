@@ -15,6 +15,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 
 @Repository
+@Suppress("TooManyFunctions") // Repository methods intentionally mirror MCP/read-model operations.
 class NoteRepository(
     private val dsl: DSLContext,
 ) {
@@ -152,10 +153,10 @@ class NoteRepository(
         var frontier: Set<String> = setOf(id)
         val collected = mutableListOf<KbRelation>()
         repeat(effectiveDepth) {
-            if (frontier.isEmpty()) return@repeat
-            val edges = fetchEdgesTouching(frontier)
-            frontier = absorbEdges(edges, collected, visited)
-            if (collected.size >= MAX_ROWS) return collected
+            if (frontier.isNotEmpty() && collected.size < MAX_ROWS) {
+                val edges = fetchEdgesTouching(frontier)
+                frontier = absorbEdges(edges, collected, visited)
+            }
         }
         return collected
     }

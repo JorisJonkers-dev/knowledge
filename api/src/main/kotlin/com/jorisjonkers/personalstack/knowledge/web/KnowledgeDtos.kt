@@ -186,7 +186,11 @@ data class SourceResponse(
     val count: Int,
 ) {
     companion object {
-        fun from(summary: SourceSummary): SourceResponse = SourceResponse(source = summary.source, count = summary.count)
+        fun from(summary: SourceSummary): SourceResponse =
+            SourceResponse(
+                source = summary.source,
+                count = summary.count,
+            )
     }
 }
 

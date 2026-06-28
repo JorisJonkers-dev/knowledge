@@ -12,6 +12,12 @@ jooqCodegen {
     migrationLocations.set(listOf("filesystem:src/main/resources/db/migration"))
 }
 
+tasks
+    .matching { it.name in listOf("runKtlintCheckOverMainSourceSet", "runKtlintFormatOverMainSourceSet") }
+    .configureEach {
+        dependsOn("generateJooq")
+    }
+
 dependencies {
     implementation(libs.kotlin.commons.messaging)
     implementation(libs.kotlin.commons.observability)

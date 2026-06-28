@@ -74,8 +74,11 @@ internal object JsonArguments {
         node: JsonNode,
         field: String,
     ): List<String> {
-        val arr = node.get(field) ?: return emptyList()
-        if (!arr.isArray) return emptyList()
-        return arr.mapNotNull { if (it.isTextual) it.asText() else null }
+        val arr = node.get(field)
+        return if (arr?.isArray == true) {
+            arr.mapNotNull { if (it.isTextual) it.asText() else null }
+        } else {
+            emptyList()
+        }
     }
 }

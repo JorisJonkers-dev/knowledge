@@ -19,10 +19,18 @@ import tools.jackson.databind.JsonNode
  * planned follow-up, not the current deep implementation.
  */
 @Component
+@Suppress("TooManyFunctions") // Read-path descriptors, parsers, and projections stay co-located.
 class ReadMcpTools(
     private val recallService: RecallService,
 ) {
-    fun tools(): List<McpTool> = listOf(recallTool(), getNoteTool(), listRecentTool(), findConflictsTool(), relationsTool())
+    fun tools(): List<McpTool> =
+        listOf(
+            recallTool(),
+            getNoteTool(),
+            listRecentTool(),
+            findConflictsTool(),
+            relationsTool(),
+        )
 
     private fun recallTool() = McpTool(recallDescriptor(), ::recallHandler)
 

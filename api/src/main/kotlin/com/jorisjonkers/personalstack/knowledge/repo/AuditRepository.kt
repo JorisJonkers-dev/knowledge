@@ -3,6 +3,7 @@ package com.jorisjonkers.personalstack.knowledge.repo
 import com.jorisjonkers.personalstack.knowledge.domain.KbAuditRow
 import com.jorisjonkers.personalstack.knowledge.domain.Ulid
 import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbAudit.KB_AUDIT
+import com.jorisjonkers.personalstack.knowledge.jooq.tables.records.KbAuditRecord
 import org.jooq.DSLContext
 import org.springframework.stereotype.Repository
 import java.time.Instant
@@ -101,7 +102,7 @@ class AuditRepository(
             .map(::recordToDomain)
     }
 
-    private fun recordToDomain(record: com.jorisjonkers.personalstack.knowledge.jooq.tables.records.KbAuditRecord): KbAuditRow =
+    private fun recordToDomain(record: KbAuditRecord): KbAuditRow =
         KbAuditRow(
             id = record.id ?: error("kb_audit row missing id"),
             actor = record.actor ?: "",

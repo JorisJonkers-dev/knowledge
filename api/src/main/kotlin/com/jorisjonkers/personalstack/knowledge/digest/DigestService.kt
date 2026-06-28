@@ -76,19 +76,21 @@ class DigestService(
                 .asString()
                 .orEmpty()
                 .lowercase()
-        if (kind !in VALID_KINDS) return null
         val title = node.path("title").asString().orEmpty()
         val body = node.path("body").asString().orEmpty()
-        if (title.length < MIN_TITLE_LENGTH || body.length < MIN_BODY_LENGTH) return null
-        return DigestCandidate(
-            kind = kind,
-            title = title,
-            body = body,
-            suggestedTopic = node.path("suggested_topic").asString().takeUnless { it.isNullOrBlank() },
-            suggestedTags = parseStringArray(node, "suggested_tags", MAX_TAGS_PER_CANDIDATE),
-            confidence = node.path("confidence").asDouble(0.0).coerceIn(0.0, 1.0),
-            relevantExcerpts = parseStringArray(node, "relevant_excerpts", MAX_EXCERPTS_PER_CANDIDATE),
-        )
+        return if (kind in VALID_KINDS && title.length >= MIN_TITLE_LENGTH && body.length >= MIN_BODY_LENGTH) {
+            DigestCandidate(
+                kind = kind,
+                title = title,
+                body = body,
+                suggestedTopic = node.path("suggested_topic").asString().takeUnless { it.isNullOrBlank() },
+                suggestedTags = parseStringArray(node, "suggested_tags", MAX_TAGS_PER_CANDIDATE),
+                confidence = node.path("confidence").asDouble(0.0).coerceIn(0.0, 1.0),
+                relevantExcerpts = parseStringArray(node, "relevant_excerpts", MAX_EXCERPTS_PER_CANDIDATE),
+            )
+        } else {
+            null
+        }
     }
 
     private fun parseStringArray(

@@ -18,7 +18,13 @@ import org.springframework.stereotype.Component
 class CaptureMcpTools(
     private val captureService: CaptureService,
 ) {
-    fun tools(): List<McpTool> = listOf(captureLessonTool(), captureDecisionTool(), ingestNoteTool(), captureQuestionTool())
+    fun tools(): List<McpTool> =
+        listOf(
+            captureLessonTool(),
+            captureDecisionTool(),
+            ingestNoteTool(),
+            captureQuestionTool(),
+        )
 
     private fun captureLessonTool() =
         McpTool(

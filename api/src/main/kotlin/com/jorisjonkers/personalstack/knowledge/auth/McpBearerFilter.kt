@@ -60,14 +60,14 @@ class McpBearerFilter(
     private fun resolveToken(authorization: String?): String? {
         if (properties.tokens.isEmpty()) {
             log.debug("MCP bearer token list is empty — rejecting all /mcp requests")
-            return null
         }
-        val presented = extractBearerToken(authorization) ?: return null
-        // Linear scan with constantTimeEquals — the token list is
-        // device-scale (handfuls of entries), not user-scale, so
-        // hashing-then-lookup buys nothing.
-        return properties.tokens.firstNotNullOfOrNull { (name, expected) ->
-            if (constantTimeEquals(presented, expected)) name else null
+        return extractBearerToken(authorization)?.let { presented ->
+            // Linear scan with constantTimeEquals — the token list is
+            // device-scale (handfuls of entries), not user-scale, so
+            // hashing-then-lookup buys nothing.
+            properties.tokens.firstNotNullOfOrNull { (name, expected) ->
+                if (constantTimeEquals(presented, expected)) name else null
+            }
         }
     }
 

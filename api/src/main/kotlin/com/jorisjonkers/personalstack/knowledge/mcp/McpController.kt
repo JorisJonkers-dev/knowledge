@@ -32,19 +32,18 @@ class McpController(
     @PostMapping(consumes = [MediaType.APPLICATION_JSON_VALUE])
     fun rpc(
         @RequestBody request: JsonRpcRequest,
-    ): ResponseEntity<JsonRpcResponse> {
+    ): ResponseEntity<JsonRpcResponse> =
         // JSON-RPC 2.0 notifications (no `id`) get an empty 202 reply per
         // MCP Streamable-HTTP. Returning a JSON-RPC error here makes
         // rmcp-based clients (Codex, etc.) abort the handshake right after
         // they POST `notifications/initialized`.
-        if (request.id == null || request.id.isNull) {
-            return ResponseEntity.accepted().build()
+        when {
+            request.id == null || request.id.isNull -> ResponseEntity.accepted().build()
+            request.jsonrpc != "2.0" -> {
+                ResponseEntity.ok(invalidRequestResponse(request.id, "jsonrpc field must be \"2.0\""))
+            }
+            else -> ResponseEntity.ok(dispatch(request))
         }
-        if (request.jsonrpc != "2.0") {
-            return ResponseEntity.ok(invalidRequestResponse(request.id, "jsonrpc field must be \"2.0\""))
-        }
-        return ResponseEntity.ok(dispatch(request))
-    }
 
     private fun dispatch(request: JsonRpcRequest): JsonRpcResponse =
         when (request.method) {
@@ -63,12 +62,15 @@ class McpController(
                 ?.get("name")
                 ?.asText()
                 .orEmpty()
-        if (name.isBlank()) return invalidParamsResponse(request.id, "prompts/get: missing required string 'name'")
         val arguments = request.params?.get("arguments")
-        val resolved =
-            prompts.get(name, arguments)
-                ?: return methodNotFoundResponse(request.id, "prompts/get:$name")
-        return JsonRpcResponse(id = request.id, result = projectPromptResult(resolved))
+        return when {
+            name.isBlank() -> invalidParamsResponse(request.id, "prompts/get: missing required string 'name'")
+            else ->
+                prompts
+                    .get(name, arguments)
+                    ?.let { JsonRpcResponse(id = request.id, result = projectPromptResult(it)) }
+                    ?: methodNotFoundResponse(request.id, "prompts/get:$name")
+        }
     }
 
     private fun projectPromptResult(resolved: PromptResult): Map<String, Any?> =

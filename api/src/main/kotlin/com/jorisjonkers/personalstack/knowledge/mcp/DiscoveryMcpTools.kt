@@ -228,7 +228,11 @@ class DiscoveryMcpTools(
             },
         )
 
-    private fun findDuplicatesTool() = McpTool(descriptor = findDuplicatesDescriptor(), handler = ::findDuplicatesHandler)
+    private fun findDuplicatesTool() =
+        McpTool(
+            descriptor = findDuplicatesDescriptor(),
+            handler = ::findDuplicatesHandler,
+        )
 
     private fun findDuplicatesDescriptor() =
         toolDescriptor(

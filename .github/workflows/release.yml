@@ -75,7 +75,7 @@ jobs:
     name: Publish API Clients
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    uses: JorisJonkers-dev/github-workflows/.github/workflows/publish-api-clients.yml@v0.7.0
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/publish-api-clients.yml@v0.7.1
     permissions:
       contents: read
       packages: write

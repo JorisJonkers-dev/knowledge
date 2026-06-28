@@ -24,6 +24,9 @@ enum class RecallMode(
     ;
 
     companion object {
-        fun fromWire(wire: String?): RecallMode? = wire?.let { value -> entries.firstOrNull { it.wire.equals(value, ignoreCase = true) } }
+        fun fromWire(wire: String?): RecallMode? =
+            wire?.let { value ->
+                entries.firstOrNull { it.wire.equals(value, ignoreCase = true) }
+            }
     }
 }

@@ -33,7 +33,7 @@ class TagClusterService(
 ) {
     private val log = LoggerFactory.getLogger(TagClusterService::class.java)
 
-    @Suppress("TooGenericExceptionCaught")
+    @Suppress("ReturnCount", "TooGenericExceptionCaught")
     fun listTagCandidates(
         minCount: Int,
         threshold: Double,

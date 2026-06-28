@@ -14,6 +14,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 
 @Repository
+@Suppress("TooManyFunctions") // Review buckets are a single query surface for the governance summary.
 class ReviewRepository(
     private val dsl: DSLContext,
 ) {
@@ -123,7 +124,10 @@ class ReviewRepository(
             .ne(INBOX_SCOPE)
             .and(KB_NOTES.SCOPE.ne(NEEDS_REVIEW_SCOPE))
 
-    private fun needsReviewPathCondition(): Condition = KB_NOTES.VAULT_PATH.like("${likeLiteral(NEEDS_REVIEW_PREFIX)}%", LIKE_ESCAPE)
+    private fun needsReviewPathCondition(): Condition =
+        KB_NOTES
+            .VAULT_PATH
+            .like("${likeLiteral(NEEDS_REVIEW_PREFIX)}%", LIKE_ESCAPE)
 
     private fun likeLiteral(value: String): String =
         value
