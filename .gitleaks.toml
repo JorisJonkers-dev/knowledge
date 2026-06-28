@@ -1,0 +1,8 @@
+title = "knowledge gitleaks config"
+
+[allowlist]
+description = "Generated fixtures and lockfiles do not carry deployable secrets."
+paths = [
+  '''pnpm-lock\.yaml''',
+  '''ingest-worker/uv\.lock''',
+]

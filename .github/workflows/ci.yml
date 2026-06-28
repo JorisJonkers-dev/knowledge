@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  jvm:
+    name: JVM
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/jvm-ci.yml@v0.6.1
+    with:
+      lint-gradle-args: :api:detekt :api:ktlintCheck
+      test-gradle-args: :api:test :api:integrationTest :api:jacocoTestCoverageVerification :api:exportOpenApiSpec
+    secrets:
+      packages-token: ${{ secrets.GITHUB_TOKEN }}
+
+  python-lint:
+    name: Python Lint
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/python-ci.yml@v0.6.1
+    with:
+      python-version: '3.12'
+      working-directory: ingest-worker
+      install-command: python -m pip install uv==0.7.8 && uv sync --frozen
+      lint-command: uv run ruff check . && uv run mypy
+      test-command: ''
+
+  python-unit:
+    name: Python Unit
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/python-ci.yml@v0.6.1
+    with:
+      python-version: '3.12'
+      working-directory: ingest-worker
+      install-command: python -m pip install uv==0.7.8 && uv sync --frozen
+      lint-command: ''
+      test-command: uv run pytest --cov
+
+  python-integration:
+    name: Python Integration
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/python-ci.yml@v0.6.1
+    with:
+      python-version: '3.12'
+      working-directory: ingest-worker
+      install-command: python -m pip install uv==0.7.8 && uv sync --frozen
+      lint-command: ''
+      test-command: uv run pytest -m integration
+
+  contract:
+    name: Contract Drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Check OpenAPI drift
+        uses: JorisJonkers-dev/api-contract-checks@v1.0.0
+        with:
+          profile: knowledge-api
+          spec-path: client-spec/openapi/knowledge-api.json
+          export-command: ./gradlew :api:exportOpenApiSpec --no-daemon
+          guidance: ./gradlew :api:exportOpenApiSpec
+
+      - name: Fetch base contract
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: git fetch --depth=1 origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+
+      - name: Check breaking OpenAPI changes
+        uses: oasdiff/oasdiff-action/breaking@v0
+        with:
+          base: origin/${{ github.base_ref || 'main' }}:client-spec/openapi/knowledge-api.json
+          revision: HEAD:client-spec/openapi/knowledge-api.json
+          fail-on: WARN
+
+  client-dry-run:
+    name: Client Dry Run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Build JVM clients
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./gradlew :client-spec:check :clients:java:build :clients:kotlin:build publishToMavenLocal --no-daemon
+
+      - name: Build TypeScript client
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @jorisjonkers-dev/knowledge-api-client generate
+          pnpm --filter @jorisjonkers-dev/knowledge-api-client build
+          pnpm --filter @jorisjonkers-dev/knowledge-api-client pack:dry-run
+
+  docker:
+    name: Docker (${{ matrix.image }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: knowledge-api
+            dockerfile: api/Dockerfile
+          - image: knowledge-ingest-worker
+            dockerfile: ingest-worker/Dockerfile
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/docker-image-ci.yml@v0.6.1
+    with:
+      image-name: knowledge/${{ matrix.image }}
+      dockerfile: ${{ matrix.dockerfile }}
+    secrets:
+      packages-token: ${{ secrets.GITHUB_TOKEN }}
+
+  migration-guard:
+    name: Migration Guard
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/migration-guard.yml@v0.6.1
+    with:
+      migration-regex: api/src/main/resources/db/migration(-pg)?/V[0-9][^/]*\.sql$
+      scope-regex: (api)/.*
+
+  pipeline-complete:
+    name: Pipeline Complete
+    if: always()
+    needs:
+      - jvm
+      - python-lint
+      - python-unit
+      - python-integration
+      - contract
+      - client-dry-run
+      - docker
+      - migration-guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all gating jobs succeeded
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}

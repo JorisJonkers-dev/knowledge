@@ -1,0 +1,11 @@
+{
+  "name": "knowledge",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.25.0",
+  "scripts": {
+    "client:generate": "pnpm --filter @jorisjonkers-dev/knowledge-api-client generate",
+    "client:build": "pnpm --filter @jorisjonkers-dev/knowledge-api-client build",
+    "client:pack": "pnpm --filter @jorisjonkers-dev/knowledge-api-client pack:dry-run"
+  }
+}

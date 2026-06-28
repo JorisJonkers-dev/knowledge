@@ -1,0 +1,163 @@
+spring:
+  application:
+    name: knowledge-api
+  threads:
+    virtual:
+      enabled: true
+  # Phase 4a uses Vault Agent inject for static env (sourced once by the
+  # entrypoint shell), not Spring Cloud Vault's live secret refresh — so
+  # the autoconfigured client + health indicator are turned off here. The
+  # deployment.yaml can flip VAULT_ENABLED=true later when knowledge-api
+  # needs lease-aware secret rotation (e.g. the bearer-token allow-list
+  # under secret/data/knowledge-api in Phase 4b).
+  cloud:
+    vault:
+      enabled: ${VAULT_ENABLED:false}
+  # AMQP — IngestPublisher.convertAndSend lands here for every
+  # capture_*/ingest_note MCP call. Without explicit host config Spring
+  # Boot defaults to localhost:5672 which doesn't exist in the pod, so
+  # every capture INSERTs the kb_notes row but then 500s on publish.
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:knowledge_db}
+    username: ${DB_USER:kb_user}
+    password: ${DB_PASSWORD:kb_password}
+    hikari:
+      pool-name: knowledge-api-pool
+      maximum-pool-size: 5
+      minimum-idle: 2
+      connection-timeout: 10000
+      validation-timeout: 5000
+      idle-timeout: 600000
+      keepalive-time: 30000
+      max-lifetime: 1800000
+      leak-detection-threshold: 60000
+      auto-commit: true
+      data-source-properties:
+        tcpKeepAlive: true
+        socketTimeout: 30
+        connectTimeout: 10
+        loginTimeout: 10
+        ApplicationName: knowledge-api
+  flyway:
+    enabled: true
+    # Two locations: `db/migration` is the codegen-safe tree (jOOQ's
+    # DDLDatabase parses every file here, so the SQL subset stays inside
+    # what H2-compatible parsing can handle — no JSONB, no GIN, no
+    # vector(N)). `db/migration-pg` holds Postgres-only DDL the runtime
+    # needs but codegen must never see (pgvector columns, HNSW indexes,
+    # GIN indexes, JSONB, …). Both are merged by Flyway on version.
+    locations: classpath:db/migration,classpath:db/migration-pg
+    # LightRAG's Python ingest worker creates its own tables on first run.
+    # baselineOnMigrate lets Flyway adopt that existing schema instead of
+    # erroring on the non-empty database; baselineVersion=0 so V1+ migrations
+    # all run on a clean DB and skip on a worker-seeded one.
+    baseline-on-migrate: true
+    baseline-version: '0'
+  jooq:
+    sql-dialect: postgres
+  # Spring Boot's HttpMessageConverter uses Jackson 2 for REST
+  # serialization. SNAKE_CASE keeps the new `/api/v1/knowledge/...`
+  # responses on the same wire shape as the MCP tools' hand-rolled
+  # Map<String, Any?> projections (which write snake_case keys
+  # literally and so aren't affected by the bean-naming strategy).
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, prometheus
+      base-path: /api/actuator
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      # Per-contributor details on the composite endpoint. `always` is fine
+      # because /api/actuator/health is only reachable inside the cluster
+      # (or via SSO-protected ingress) — same posture auth-api uses.
+      show-details: always
+      show-components: always
+      group:
+        readiness:
+          include: readinessState, db
+
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    context-path: /
+
+# Springdoc generates the OpenAPI 3 spec from the REST controllers under
+# `web/`. Knowledge-ui consumes the committed `client-spec/openapi/knowledge-api.json` via
+# `pnpm contract:generate`. The `/api/v1/api-docs` path matches
+# assistant-api's convention so the same drift-gate script works on
+# both services.
+springdoc:
+  api-docs:
+    path: /api/v1/api-docs
+  swagger-ui:
+    path: /api/v1/swagger-ui.html
+
+knowledge:
+  # `full` (default) exposes the complete curator MCP surface; `lite`
+  # registers only recall + capture and drops the curator-governance
+  # tools (discovery, admin, digest, audit, review) for a thin
+  # low-maintenance recall+capture service. Reversible via config.
+  mode: ${KNOWLEDGE_MODE:full}
+  recall:
+    # Default mode for `knowledge.recall`. `fast` = FTS-only, `hybrid`
+    # = FTS + pgvector + RRF fusion, `deep` = hybrid + optional
+    # LightRAG graph context + reranker.
+    # Local/dev stays fast by default; production sets
+    # KB_RECALL_DEFAULT_MODE=hybrid so agent hooks get semantic recall
+    # without each session having to request it explicitly.
+    default-mode: ${KB_RECALL_DEFAULT_MODE:fast}
+    # Reciprocal-rank-fusion constant. Literature default; raising it
+    # damps lower-ranked hits more aggressively. Don't touch without
+    # an eval set in hand.
+    rrf-k: ${KB_RECALL_RRF_K:60}
+    # Hard SQL guardrails for recall legs. Agent hooks have short
+    # client-side timeouts, so the server must fail fast enough to
+    # degrade cleanly instead of holding MCP calls open for a minute.
+    fts-query-timeout-seconds: ${KB_RECALL_FTS_QUERY_TIMEOUT_SECONDS:5}
+    vector-query-timeout-seconds: ${KB_RECALL_VECTOR_QUERY_TIMEOUT_SECONDS:5}
+    graph:
+      # LightRAG uses its own embedding model/tables, so deep recall
+      # fuses graph context at the hit level. Keep disabled until the
+      # recall evals and latency dashboards justify turning it on.
+      enabled: ${KB_RECALL_GRAPH_ENABLED:false}
+      lightrag-url: ${LIGHTRAG_URL:http://lightrag.knowledge-system.svc.cluster.local:9621}
+      query-timeout-seconds: ${KB_RECALL_GRAPH_QUERY_TIMEOUT_SECONDS:5}
+      max-snippet-chars: ${KB_RECALL_GRAPH_MAX_SNIPPET_CHARS:2000}
+  ollama:
+    # Ollama OpenAI-compat base URL (with `/v1`). Same default the
+    # curator uses; override in deployment.yaml when the cluster DNS
+    # name diverges.
+    base-url: ${OLLAMA_BASE_URL:http://ollama.knowledge-system.svc.cluster.local:11434/v1}
+    # Heavy endpoint — host-native Ollama on enschede-rx7900xtx-1
+    # (RX 7900 XTX, 24 GiB VRAM) exposed via the selector-less
+    # `ollama-heavy.utility-system` Service. When set, the digest
+    # client's OllamaChatEndpointResolver probes this endpoint at
+    # startup + every `heavy-probe-cache-seconds`; a 2xx response
+    # routes the chat call here with `heavy-chat-model`, anything
+    # else stays on the in-cluster CPU Ollama with `chat-model`.
+    # Embedding + reranker paths never look here — flipping
+    # embedding models per pass would force the curator's backfill
+    # into permanent re-embedding. Unset by default so dev / smoke
+    # environments stay light-only.
+    heavy-base-url: ${OLLAMA_HEAVY_BASE_URL:}
+    heavy-chat-model: ${OLLAMA_HEAVY_CHAT_MODEL:qwen2.5:14b-instruct}
+    heavy-probe-timeout-ms: ${OLLAMA_HEAVY_PROBE_TIMEOUT_MS:2000}
+    heavy-probe-cache-seconds: ${OLLAMA_HEAVY_PROBE_CACHE_SECONDS:120}
+    # Embedding model the recall path uses to embed the user's query.
+    # MUST match the model the curator embeds notes with — different
+    # families produce incompatible embedding spaces. Bump both
+    # together.
+    embedding-model: ${KB_EMBED_MODEL:qwen3-embedding:0.6b}
+    request-timeout-seconds: ${OLLAMA_REQUEST_TIMEOUT_SECONDS:5}
