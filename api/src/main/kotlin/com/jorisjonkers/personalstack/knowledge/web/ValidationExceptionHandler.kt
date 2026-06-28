@@ -25,6 +25,6 @@ class ValidationExceptionHandler {
                 exc.message ?: "Validation failed",
             )
         detail.title = "Validation failed"
-        return ResponseEntity.unprocessableEntity().body(detail)
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(detail)
     }
 }

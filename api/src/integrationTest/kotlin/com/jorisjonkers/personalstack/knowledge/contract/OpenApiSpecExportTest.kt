@@ -6,9 +6,6 @@ import com.jorisjonkers.personalstack.knowledge.audit.AuditService
 import com.jorisjonkers.personalstack.knowledge.discovery.DiscoveryService
 import com.jorisjonkers.personalstack.knowledge.discovery.TagClusterService
 import com.jorisjonkers.personalstack.knowledge.installer.InstallerController
-import com.jorisjonkers.personalstack.knowledge.mcp.McpController
-import com.jorisjonkers.personalstack.knowledge.mcp.McpPrompts
-import com.jorisjonkers.personalstack.knowledge.mcp.McpTools
 import com.jorisjonkers.personalstack.knowledge.recall.RecallService
 import com.jorisjonkers.personalstack.knowledge.review.ReviewService
 import com.jorisjonkers.personalstack.knowledge.web.KnowledgeAuditController
@@ -40,7 +37,6 @@ import java.nio.file.Paths
         KnowledgeAuditController::class,
         KnowledgeDiscoveryController::class,
         KnowledgeReadController::class,
-        McpController::class,
         KnowledgeReviewController::class,
     ],
     properties = [
@@ -61,7 +57,6 @@ import java.nio.file.Paths
         KnowledgeDiscoveryController::class,
         KnowledgeReadController::class,
         KnowledgeReviewController::class,
-        McpController::class,
     ],
 )
 class OpenApiSpecExportTest {
@@ -94,12 +89,6 @@ class OpenApiSpecExportTest {
 
         @Bean
         fun discoveryService(): DiscoveryService = mockk(relaxed = true)
-
-        @Bean
-        fun mcpPrompts(): McpPrompts = mockk(relaxed = true)
-
-        @Bean
-        fun mcpTools(): McpTools = mockk(relaxed = true)
 
         @Bean
         fun recallService(): RecallService = mockk(relaxed = true)
