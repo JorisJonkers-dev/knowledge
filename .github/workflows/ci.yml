@@ -68,7 +68,7 @@ jobs:
           java-version: '21'
 
       - name: Check OpenAPI drift
-        uses: JorisJonkers-dev/api-contract-checks@v1.0.0
+        uses: JorisJonkers-dev/api-contract-checks@v1.1.0
         with:
           profile: knowledge-api
           spec-path: client-spec/openapi/knowledge-api.json
