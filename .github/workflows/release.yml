@@ -76,7 +76,7 @@
     'name': 'Publish API Clients'
     'needs': 'release-please'
     'if': '${{ needs.release-please.outputs.release_created == ''true'' }}'
-    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/publish-api-clients.yml@v0.8.0'
+    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/publish-api-clients.yml@v0.8.1'
     'permissions':
       'contents': 'read'
       'packages': 'write'
@@ -101,7 +101,7 @@
       - 'release-please'
       - 'publish-images'
     'if': '${{ needs.release-please.outputs.release_created == ''true'' }}'
-    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/deploy-bundle.yml@v0.8.0'
+    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/deploy-bundle.yml@v0.8.1'
     'permissions':
       'contents': 'read'
       'packages': 'write'

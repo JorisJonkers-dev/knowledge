@@ -9,7 +9,7 @@
 
 'jobs':
   'repository-hygiene':
-    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/repository-hygiene-guard.yml@v0.8.0'
+    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/repository-hygiene-guard.yml@v0.8.1'
     'with':
       'allowlist-regex': ''
     'secrets': 'inherit'

@@ -19,7 +19,7 @@
 'jobs':
   'jvm':
     'name': 'JVM'
-    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/jvm-ci.yml@v0.8.0'
+    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/jvm-ci.yml@v0.8.1'
     'with':
       'lint-gradle-args': ':api:detekt :api:ktlintCheck'
       'test-gradle-args': ':api:test :api:integrationTest :api:jacocoTestCoverageVerification :api:exportOpenApiSpec'
@@ -28,7 +28,7 @@
 
   'python-lint':
     'name': 'Python Lint'
-    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/python-ci.yml@v0.8.0'
+    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/python-ci.yml@v0.8.1'
     'with':
       'python-version': '3.12'
       'working-directory': 'ingest-worker'
@@ -38,7 +38,7 @@
 
   'python-unit':
     'name': 'Python Unit'
-    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/python-ci.yml@v0.8.0'
+    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/python-ci.yml@v0.8.1'
     'with':
       'python-version': '3.12'
       'working-directory': 'ingest-worker'
@@ -48,7 +48,7 @@
 
   'python-integration':
     'name': 'Python Integration'
-    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/python-ci.yml@v0.8.0'
+    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/python-ci.yml@v0.8.1'
     'with':
       'python-version': '3.12'
       'working-directory': 'ingest-worker'
@@ -112,7 +112,7 @@
 
   'client-dry-run':
     'name': 'Client Dry Run'
-    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/publish-api-clients.yml@v0.8.0'
+    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/publish-api-clients.yml@v0.8.1'
     'permissions':
       'contents': 'read'
       'packages': 'write'
@@ -164,7 +164,7 @@
 
   'deploy-bundle':
     'name': 'Deploy Bundle Dry Run'
-    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/deploy-bundle.yml@v0.8.0'
+    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/deploy-bundle.yml@v0.8.1'
     'permissions':
       'contents': 'read'
       'packages': 'write'
@@ -180,7 +180,7 @@
 
   'migration-guard':
     'name': 'Migration Guard'
-    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/migration-guard.yml@v0.8.0'
+    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/migration-guard.yml@v0.8.1'
     'with':
       'migration-regex': 'api/src/main/resources/db/migration(-pg)?/V(1[3-9]|[2-9][0-9]|[1-9][0-9]{2,})[^/]*\.sql$'
       'scope-regex': '(api/src/main/resources/db)/.*'
