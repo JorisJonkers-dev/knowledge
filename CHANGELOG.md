@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/JorisJonkers-dev/knowledge/compare/v0.2.0...v0.3.0) (2026-06-29)
+
+
+### Features
+
+* **deploy:** add knowledge deploy bundle source ([#3](https://github.com/JorisJonkers-dev/knowledge/issues/3)) ([354a8a2](https://github.com/JorisJonkers-dev/knowledge/commit/354a8a23c3c4ace2958790b793a945f71fbf2072))
+
 ## [0.2.0](https://github.com/JorisJonkers-dev/knowledge/compare/v0.1.0...v0.2.0) (2026-06-28)
 
 
