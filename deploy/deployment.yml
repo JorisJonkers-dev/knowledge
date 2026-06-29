@@ -1,0 +1,156 @@
+apiVersion: deployment.jorisjonkers.dev/v2
+kind: Deployment
+metadata:
+  name: knowledge
+  labels:
+    area: knowledge
+spec:
+  services:
+    knowledge-api:
+      image: ghcr.io/jorisjonkers-dev/knowledge/knowledge-api:v0.2.0
+      namespace: knowledge-system
+      account: knowledge-api
+      ports:
+        - name: http
+          containerPort: 8080
+      data:
+        postgres:
+          claim: data.platform-postgres.knowledge-api
+          database: knowledge_db
+          env:
+            host: DB_HOST
+            port: DB_PORT
+            name: DB_NAME
+            user: DB_USER
+            password: DB_PASSWORD
+      messaging:
+        rabbitmq:
+          claim: data.platform-rabbitmq.knowledge-api
+          exchange: knowledge
+          publishRoutingKeys:
+            - knowledge.lesson
+            - knowledge.decision
+            - knowledge.ingest
+          env:
+            host: RABBITMQ_HOST
+            port: RABBITMQ_PORT
+            user: RABBITMQ_USER
+            password: RABBITMQ_PASSWORD
+            vhost: RABBITMQ_VHOST
+      placement:
+        site: frankfurt
+        nodeSelector:
+          personal-stack/site: frankfurt
+      autoscaling:
+        minReplicas: 1
+        maxReplicas: 1
+      credentials:
+        - name: postgres
+          claim: data.platform-postgres.knowledge-api
+          destinationSecret: knowledge-api-postgres
+        - name: rabbitmq
+          claim: data.platform-rabbitmq.knowledge-api
+          destinationSecret: knowledge-api-rabbitmq
+        - name: mcp-bearer
+          claim: secret.knowledge-system.mcp-bearer
+          destinationSecret: knowledge-api-mcp-tokens
+      observability:
+        metrics:
+          - port: http
+            path: /api/actuator/prometheus
+        gatus:
+          - name: readiness
+            url: http://knowledge-api.knowledge-system.svc.cluster.local:8080/api/actuator/health/readiness
+      routes:
+        - host: kb.jorisjonkers.dev
+          expose:
+            tier: public-frankfurt
+          rules:
+            - path: /mcp
+              port: http
+              operation: exact
+              auth:
+                scope: anonymous
+            - path: /mcp/
+              port: http
+              operation: prefix
+              auth:
+                scope: anonymous
+            - path: /install.sh
+              port: http
+              operation: exact
+              auth:
+                scope: anonymous
+            - path: /install-agents.sh
+              port: http
+              operation: exact
+              auth:
+                scope: anonymous
+            - path: /
+              port: http
+              operation: prefix
+              middleware:
+                - forward-auth
+              auth:
+                scope: authenticated
+      safety:
+        gateOn:
+          - parity
+          - render-drift
+    knowledge-ingest-worker:
+      image: ghcr.io/jorisjonkers-dev/knowledge/knowledge-ingest-worker:v0.2.0
+      namespace: knowledge-system
+      account: knowledge-ingest-worker
+      data:
+        postgres:
+          claim: data.platform-postgres.knowledge-ingest-worker
+          database: knowledge_db
+          env:
+            host: DB_HOST
+            port: DB_PORT
+            name: DB_NAME
+            user: DB_USER
+            password: DB_PASSWORD
+        vaultClone:
+          pvc: knowledge-vault-clone
+          size: 5Gi
+          accessMode: ReadWriteOnce
+          mountPath: /var/lib/knowledge-vault
+          stateMovePlanRequired: true
+      messaging:
+        rabbitmq:
+          claim: data.platform-rabbitmq.knowledge-ingest-worker
+          queue: knowledge.ingest
+          bindings:
+            - exchange: knowledge
+              routingKey: knowledge.*
+          env:
+            host: RABBITMQ_HOST
+            port: RABBITMQ_PORT
+            user: RABBITMQ_USER
+            password: RABBITMQ_PASSWORD
+            vhost: RABBITMQ_VHOST
+      placement:
+        site: frankfurt
+        nodeSelector:
+          personal-stack/site: frankfurt
+      autoscaling:
+        minReplicas: 1
+        maxReplicas: 1
+      credentials:
+        - name: postgres
+          claim: data.platform-postgres.knowledge-ingest-worker
+          destinationSecret: knowledge-ingest-worker-postgres
+        - name: rabbitmq
+          claim: data.platform-rabbitmq.knowledge-ingest-worker
+          destinationSecret: knowledge-ingest-worker-rabbitmq
+        - name: vault-deploy-key
+          claim: secret.knowledge-system.vault-deploy-key
+          destinationSecret: knowledge-vault-deploy-key
+      hooks:
+        pre:
+          - knowledge-vault-migrate-2026-05-18
+      safety:
+        gateOn:
+          - parity
+          - render-drift
