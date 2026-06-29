@@ -1,13 +1,43 @@
-.gradle/
-.kotlin/
+# Build output
 build/
 **/build/
+dist/
+out/
+target/
+.gradle/
+.kotlin/
+node_modules/
+coverage/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Python
 .venv/
 __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-node_modules/
-dist/
-coverage/
+
+# Logs
 *.log
+
+# Local planning and agent scratch artifacts
+.specify/
+specs/[0-9][0-9][0-9]-*/
+plans/
+planning/
+scratchpad/
+scratchpads/
+.agent-council/
+**/*scratchpad*.md
+**/*.scratch.md
+**/*agent-council*.md
+.claude/commands/speckit*.md
+.claude/skills/speckit*/
+.agents/skills/speckit*/
+templates/**/.specify/
+templates/**/.claude/commands/speckit*.md

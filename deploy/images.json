@@ -1,0 +1,6 @@
+{
+  "images": [
+    "ghcr.io/jorisjonkers-dev/knowledge/knowledge-api:v0.2.0",
+    "ghcr.io/jorisjonkers-dev/knowledge/knowledge-ingest-worker:v0.2.0"
+  ]
+}

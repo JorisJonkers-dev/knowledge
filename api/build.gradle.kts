@@ -85,6 +85,7 @@ tasks.register<Test>("exportOpenApiSpec") {
             .file("client-spec/openapi/knowledge-api.json")
             .asFile.absolutePath,
     )
+    systemProperty("springdoc.api-docs.enabled", "true")
     extensions.configure<JacocoTaskExtension> {
         isEnabled = false
     }

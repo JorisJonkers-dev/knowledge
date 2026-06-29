@@ -100,6 +100,7 @@ server:
 # both services.
 springdoc:
   api-docs:
+    enabled: ${SPRINGDOC_API_DOCS_ENABLED:false}
     path: /api/v1/api-docs
   swagger-ui:
     path: /api/v1/swagger-ui.html
