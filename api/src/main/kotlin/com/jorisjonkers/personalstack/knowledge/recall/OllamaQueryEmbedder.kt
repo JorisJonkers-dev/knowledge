@@ -4,7 +4,9 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.MediaType
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
+import org.springframework.web.client.RestClientException
 import org.springframework.web.client.body
+import tools.jackson.core.JacksonException
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.KotlinModule
 
@@ -38,7 +40,18 @@ class OllamaQueryEmbedder(
             .baseUrl(baseUrl)
             .build()
 
-    override fun embed(query: String): FloatArray {
+    override fun embed(query: String): FloatArray =
+        try {
+            embedOrThrow(query)
+        } catch (ex: RestClientException) {
+            throw QueryEmbeddingException("Ollama embedding request failed", ex)
+        } catch (ex: JacksonException) {
+            throw QueryEmbeddingException("Ollama embedding response was not valid JSON", ex)
+        } catch (ex: IllegalStateException) {
+            throw QueryEmbeddingException("Ollama embedding response was incomplete", ex)
+        }
+
+    private fun embedOrThrow(query: String): FloatArray {
         val raw =
             client
                 .post()
@@ -58,3 +71,8 @@ class OllamaQueryEmbedder(
         return FloatArray(embedding.size()) { i -> embedding.get(i).asDouble().toFloat() }
     }
 }
+
+class QueryEmbeddingException(
+    message: String,
+    cause: Throwable,
+) : RuntimeException(message, cause)

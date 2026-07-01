@@ -1,4 +1,3 @@
-@file:Suppress("DEPRECATION") // Jackson 3 deprecated asText()/isTextual.
 
 package com.jorisjonkers.personalstack.knowledge.mcp
 

@@ -2,6 +2,7 @@ package com.jorisjonkers.personalstack.knowledge.mcp
 
 import com.jorisjonkers.personalstack.knowledge.auth.AdminAuthorization
 import com.jorisjonkers.personalstack.knowledge.domain.Topic
+import com.jorisjonkers.personalstack.knowledge.repo.AuditRecordRequest
 import com.jorisjonkers.personalstack.knowledge.repo.AuditRepository
 import com.jorisjonkers.personalstack.knowledge.repo.NoteRepository
 import com.jorisjonkers.personalstack.knowledge.repo.TopicRepository
@@ -31,10 +32,6 @@ import tools.jackson.databind.JsonNode
  * verbose — the MCP `tools/list` payload is the agent-facing API,
  * and the description text is part of that contract.
  */
-@Suppress(
-    "TooManyFunctions",
-    "LargeClass",
-) // Admin tool surface lives here by design — one descriptor + handler per tool.
 @Component
 class AdminMcpTools(
     private val topicRepository: TopicRepository,
@@ -46,17 +43,182 @@ class AdminMcpTools(
 
     fun tools(): List<McpTool> =
         listOf(
-            McpTool(addTopicDescriptor(), ::addTopicHandler),
-            McpTool(updateTopicDescriptor(), ::updateTopicHandler),
-            McpTool(mergeTopicsDescriptor(), ::mergeTopicsHandler),
-            McpTool(renameTagDescriptor(), ::renameTagHandler),
-            McpTool(mergeTagsDescriptor(), ::mergeTagsHandler),
-            McpTool(reclassifyNoteDescriptor(), ::reclassifyNoteHandler),
+            McpTool(AdminMcpDescriptors.addTopic(), ::addTopicHandler),
+            McpTool(AdminMcpDescriptors.updateTopic(), ::updateTopicHandler),
+            McpTool(AdminMcpDescriptors.mergeTopics(), ::mergeTopicsHandler),
+            McpTool(AdminMcpDescriptors.renameTag(), ::renameTagHandler),
+            McpTool(AdminMcpDescriptors.mergeTags(), ::mergeTagsHandler),
+            McpTool(AdminMcpDescriptors.reclassifyNote(), ::reclassifyNoteHandler),
         )
 
     // -------- add_topic --------
 
-    private fun addTopicDescriptor(): Map<String, Any> =
+    private fun addTopicHandler(args: JsonNode): Map<String, Any?> {
+        val actor = adminAuthorization.requireAdmin()
+        val slug = JsonArguments.requireString(args, "slug")
+        val description = JsonArguments.optionalString(args, "description").orEmpty()
+        val aliases = JsonArguments.optionalStringArray(args, "aliases").toSet()
+        try {
+            topicRepository.insert(slug, description, aliases, createdBy = actor)
+        } catch (exc: IntegrityConstraintViolationException) {
+            log.info("admin.add_topic.duplicate", exc)
+            error(
+                "topic `$slug` already exists or one of its aliases collides — " +
+                    "use update_topic to modify, or merge_topics to consolidate",
+            )
+        }
+        val created =
+            topicRepository.findBySlug(slug)
+                ?: error("topic `$slug` missing immediately after insert")
+        return mapOf("topic" to projectTopic(created), "actor" to actor)
+    }
+
+    // -------- update_topic --------
+
+    private fun updateTopicHandler(args: JsonNode): Map<String, Any?> {
+        val actor = adminAuthorization.requireAdmin()
+        val slug = JsonArguments.requireString(args, "slug")
+        val description = JsonArguments.optionalString(args, "description")
+        val aliases =
+            if (args.has("aliases")) JsonArguments.optionalStringArray(args, "aliases").toSet() else null
+        val isActive = JsonArguments.optionalBoolean(args, "is_active")
+        val updated = topicRepository.update(slug, description, aliases, isActive)
+        if (!updated) error("topic `$slug` does not exist")
+        val refreshed =
+            topicRepository.findBySlug(slug)
+                ?: error("topic `$slug` disappeared after update")
+        return mapOf("topic" to projectTopic(refreshed), "actor" to actor)
+    }
+
+    // -------- merge_topics --------
+
+    private fun mergeTopicsHandler(args: JsonNode): Map<String, Any?> {
+        val actor = adminAuthorization.requireAdmin()
+        val fromSlug = JsonArguments.requireString(args, "from_slug")
+        val intoSlug = JsonArguments.requireString(args, "into_slug")
+        if (fromSlug == intoSlug) {
+            error("merge_topics: from_slug and into_slug must differ")
+        }
+        if (topicRepository.findBySlug(intoSlug) == null) {
+            error("merge_topics: into_slug `$intoSlug` is not defined")
+        }
+        val moved = topicRepository.mergeInto(fromSlug, intoSlug)
+        return mapOf(
+            "from_slug" to fromSlug,
+            "into_slug" to intoSlug,
+            "notes_moved" to moved,
+            "actor" to actor,
+        )
+    }
+
+    // -------- rename_tag --------
+
+    private fun renameTagHandler(args: JsonNode): Map<String, Any?> {
+        val actor = adminAuthorization.requireAdmin()
+        val fromTag = JsonArguments.requireString(args, "from")
+        val toTag = JsonArguments.requireString(args, "to")
+        if (fromTag == toTag) error("rename_tag: from and to must differ")
+        val touched = topicRepository.renameTag(fromTag, toTag)
+        val auditId =
+            if (touched > 0) {
+                auditRepository
+                    .record(
+                        AuditRecordRequest(
+                            actor = actor,
+                            action = "rename_tag",
+                            targetKind = "tag",
+                            beforeJson = renameTagBeforePayload(fromTag),
+                            afterJson = renameTagAfterPayload(toTag, touched),
+                        ),
+                    ).id
+            } else {
+                null
+            }
+        return buildMap {
+            put("from", fromTag)
+            put("to", toTag)
+            put("rows_touched", touched)
+            put("actor", actor)
+            if (auditId != null) put("audit_id", auditId)
+        }
+    }
+
+    // -------- merge_tags --------
+
+    private fun mergeTagsHandler(args: JsonNode): Map<String, Any?> {
+        val actor = adminAuthorization.requireAdmin()
+        val fromTags = JsonArguments.optionalStringArray(args, "from")
+        val intoTag = JsonArguments.requireString(args, "into")
+        if (fromTags.isEmpty()) error("merge_tags: `from` must contain at least one source tag")
+        val result = topicRepository.mergeTags(fromTags, intoTag)
+        log.info(
+            "merge_tags applied: from={} into={} renamed={} dropped_dupes={} actor={}",
+            fromTags,
+            intoTag,
+            result.rowsRenamed,
+            result.rowsDeletedAsDupes,
+            actor,
+        )
+        val auditId = recordMergeTagsAudit(actor, fromTags, intoTag, result)
+        return projectMergeTagsResult(fromTags, intoTag, result, actor, auditId)
+    }
+
+    // -------- reclassify_note --------
+
+    private fun reclassifyNoteHandler(args: JsonNode): Map<String, Any?> {
+        val actor = adminAuthorization.requireAdmin()
+        val id = JsonArguments.requireString(args, "id")
+        val guidance = JsonArguments.optionalString(args, "guidance")
+        val touched = noteRepository.markForReclassify(id)
+        if (touched == 0) {
+            error("reclassify_note: note `$id` does not exist")
+        }
+        val audit =
+            auditRepository.record(
+                AuditRecordRequest(
+                    actor = actor,
+                    action = "reclassify_requested",
+                    targetId = id,
+                    targetKind = "note",
+                    afterJson = reclassifyAuditPayload(guidance),
+                ),
+            )
+        log.info(
+            "reclassify_note queued: id={} actor={} guidance_len={}",
+            id,
+            actor,
+            guidance?.length ?: 0,
+        )
+        return mapOf(
+            "id" to id,
+            "scope" to "_inbox",
+            "audit_id" to audit.id,
+            "actor" to actor,
+        )
+    }
+
+    private fun recordMergeTagsAudit(
+        actor: String,
+        fromTags: List<String>,
+        intoTag: String,
+        result: TopicRepository.MergeTagsResult,
+    ): String? {
+        if (result.rowsRenamed + result.rowsDeletedAsDupes == 0) return null
+        return auditRepository
+            .record(
+                AuditRecordRequest(
+                    actor = actor,
+                    action = "merge_tags",
+                    targetKind = "tag",
+                    beforeJson = mergeTagsBeforePayload(fromTags),
+                    afterJson = mergeTagsAfterPayload(intoTag, result),
+                ),
+            ).id
+    }
+}
+
+private object AdminMcpDescriptors {
+    fun addTopic(): Map<String, Any> =
         toolDescriptor(
             name = "knowledge.add_topic",
             description =
@@ -77,29 +239,7 @@ class AdminMcpTools(
                 ),
         )
 
-    private fun addTopicHandler(args: JsonNode): Map<String, Any?> {
-        val actor = adminAuthorization.requireAdmin()
-        val slug = JsonArguments.requireString(args, "slug")
-        val description = JsonArguments.optionalString(args, "description").orEmpty()
-        val aliases = JsonArguments.optionalStringArray(args, "aliases").toSet()
-        try {
-            topicRepository.insert(slug, description, aliases, createdBy = actor)
-        } catch (exc: IntegrityConstraintViolationException) {
-            log.info("admin.add_topic.duplicate", exc)
-            throw IllegalStateException(
-                "topic `$slug` already exists or one of its aliases collides — " +
-                    "use update_topic to modify, or merge_topics to consolidate",
-            )
-        }
-        val created =
-            topicRepository.findBySlug(slug)
-                ?: error("topic `$slug` missing immediately after insert")
-        return mapOf("topic" to projectTopic(created), "actor" to actor)
-    }
-
-    // -------- update_topic --------
-
-    private fun updateTopicDescriptor(): Map<String, Any> =
+    fun updateTopic(): Map<String, Any> =
         toolDescriptor(
             name = "knowledge.update_topic",
             description =
@@ -121,24 +261,7 @@ class AdminMcpTools(
                 ),
         )
 
-    private fun updateTopicHandler(args: JsonNode): Map<String, Any?> {
-        val actor = adminAuthorization.requireAdmin()
-        val slug = JsonArguments.requireString(args, "slug")
-        val description = JsonArguments.optionalString(args, "description")
-        val aliases =
-            if (args.has("aliases")) JsonArguments.optionalStringArray(args, "aliases").toSet() else null
-        val isActive = JsonArguments.optionalBoolean(args, "is_active")
-        val updated = topicRepository.update(slug, description, aliases, isActive)
-        if (!updated) throw IllegalStateException("topic `$slug` does not exist")
-        val refreshed =
-            topicRepository.findBySlug(slug)
-                ?: error("topic `$slug` disappeared after update")
-        return mapOf("topic" to projectTopic(refreshed), "actor" to actor)
-    }
-
-    // -------- merge_topics --------
-
-    private fun mergeTopicsDescriptor(): Map<String, Any> =
+    fun mergeTopics(): Map<String, Any> =
         toolDescriptor(
             name = "knowledge.merge_topics",
             description =
@@ -156,28 +279,7 @@ class AdminMcpTools(
                 ),
         )
 
-    private fun mergeTopicsHandler(args: JsonNode): Map<String, Any?> {
-        val actor = adminAuthorization.requireAdmin()
-        val fromSlug = JsonArguments.requireString(args, "from_slug")
-        val intoSlug = JsonArguments.requireString(args, "into_slug")
-        if (fromSlug == intoSlug) {
-            throw IllegalStateException("merge_topics: from_slug and into_slug must differ")
-        }
-        if (topicRepository.findBySlug(intoSlug) == null) {
-            throw IllegalStateException("merge_topics: into_slug `$intoSlug` is not defined")
-        }
-        val moved = topicRepository.mergeInto(fromSlug, intoSlug)
-        return mapOf(
-            "from_slug" to fromSlug,
-            "into_slug" to intoSlug,
-            "notes_moved" to moved,
-            "actor" to actor,
-        )
-    }
-
-    // -------- rename_tag --------
-
-    private fun renameTagDescriptor(): Map<String, Any> =
+    fun renameTag(): Map<String, Any> =
         toolDescriptor(
             name = "knowledge.rename_tag",
             description =
@@ -194,37 +296,7 @@ class AdminMcpTools(
                 ),
         )
 
-    private fun renameTagHandler(args: JsonNode): Map<String, Any?> {
-        val actor = adminAuthorization.requireAdmin()
-        val fromTag = JsonArguments.requireString(args, "from")
-        val toTag = JsonArguments.requireString(args, "to")
-        if (fromTag == toTag) throw IllegalStateException("rename_tag: from and to must differ")
-        val touched = topicRepository.renameTag(fromTag, toTag)
-        val auditId =
-            if (touched > 0) {
-                auditRepository
-                    .record(
-                        actor = actor,
-                        action = "rename_tag",
-                        targetKind = "tag",
-                        beforeJson = renameTagBeforePayload(fromTag),
-                        afterJson = renameTagAfterPayload(toTag, touched),
-                    ).id
-            } else {
-                null
-            }
-        return buildMap {
-            put("from", fromTag)
-            put("to", toTag)
-            put("rows_touched", touched)
-            put("actor", actor)
-            if (auditId != null) put("audit_id", auditId)
-        }
-    }
-
-    // -------- merge_tags --------
-
-    private fun mergeTagsDescriptor(): Map<String, Any> =
+    fun mergeTags(): Map<String, Any> =
         toolDescriptor(
             name = "knowledge.merge_tags",
             description =
@@ -247,27 +319,7 @@ class AdminMcpTools(
                 ),
         )
 
-    private fun mergeTagsHandler(args: JsonNode): Map<String, Any?> {
-        val actor = adminAuthorization.requireAdmin()
-        val fromTags = JsonArguments.optionalStringArray(args, "from")
-        val intoTag = JsonArguments.requireString(args, "into")
-        if (fromTags.isEmpty()) error("merge_tags: `from` must contain at least one source tag")
-        val result = topicRepository.mergeTags(fromTags, intoTag)
-        log.info(
-            "merge_tags applied: from={} into={} renamed={} dropped_dupes={} actor={}",
-            fromTags,
-            intoTag,
-            result.rowsRenamed,
-            result.rowsDeletedAsDupes,
-            actor,
-        )
-        val auditId = recordMergeTagsAudit(actor, fromTags, intoTag, result)
-        return projectMergeTagsResult(fromTags, intoTag, result, actor, auditId)
-    }
-
-    // -------- reclassify_note --------
-
-    private fun reclassifyNoteDescriptor(): Map<String, Any> =
+    fun reclassifyNote(): Map<String, Any> =
         toolDescriptor(
             name = "knowledge.reclassify_note",
             description =
@@ -297,127 +349,75 @@ class AdminMcpTools(
                         ),
                 ),
         )
-
-    private fun reclassifyNoteHandler(args: JsonNode): Map<String, Any?> {
-        val actor = adminAuthorization.requireAdmin()
-        val id = JsonArguments.requireString(args, "id")
-        val guidance = JsonArguments.optionalString(args, "guidance")
-        val touched = noteRepository.markForReclassify(id)
-        if (touched == 0) {
-            throw IllegalStateException("reclassify_note: note `$id` does not exist")
-        }
-        val audit =
-            auditRepository.record(
-                actor = actor,
-                action = "reclassify_requested",
-                targetId = id,
-                targetKind = "note",
-                afterJson = reclassifyAuditPayload(guidance),
-            )
-        log.info(
-            "reclassify_note queued: id={} actor={} guidance_len={}",
-            id,
-            actor,
-            guidance?.length ?: 0,
-        )
-        return mapOf(
-            "id" to id,
-            "scope" to "_inbox",
-            "audit_id" to audit.id,
-            "actor" to actor,
-        )
-    }
-
-    private fun reclassifyAuditPayload(guidance: String?): String =
-        if (guidance != null) {
-            """{"guidance":${jsonStringLiteral(guidance)}}"""
-        } else {
-            "{}"
-        }
-
-    private fun renameTagBeforePayload(fromTag: String): String = """{"tag":${jsonStringLiteral(fromTag)}}"""
-
-    private fun renameTagAfterPayload(
-        toTag: String,
-        rowsTouched: Int,
-    ): String = """{"tag":${jsonStringLiteral(toTag)},"rows_touched":$rowsTouched}"""
-
-    private fun mergeTagsBeforePayload(fromTags: List<String>): String = """{"from":${jsonStringArray(fromTags)}}"""
-
-    private fun recordMergeTagsAudit(
-        actor: String,
-        fromTags: List<String>,
-        intoTag: String,
-        result: TopicRepository.MergeTagsResult,
-    ): String? {
-        if (result.rowsRenamed + result.rowsDeletedAsDupes == 0) return null
-        return auditRepository
-            .record(
-                actor = actor,
-                action = "merge_tags",
-                targetKind = "tag",
-                beforeJson = mergeTagsBeforePayload(fromTags),
-                afterJson = mergeTagsAfterPayload(intoTag, result),
-            ).id
-    }
-
-    private fun projectMergeTagsResult(
-        fromTags: List<String>,
-        intoTag: String,
-        result: TopicRepository.MergeTagsResult,
-        actor: String,
-        auditId: String?,
-    ): Map<String, Any?> =
-        buildMap {
-            put("from", fromTags)
-            put("into", intoTag)
-            put("rows_renamed", result.rowsRenamed)
-            put("rows_dropped_as_dupes", result.rowsDeletedAsDupes)
-            put("actor", actor)
-            if (auditId != null) put("audit_id", auditId)
-        }
-
-    private fun mergeTagsAfterPayload(
-        intoTag: String,
-        result: TopicRepository.MergeTagsResult,
-    ): String =
-        listOf(
-            """"into":${jsonStringLiteral(intoTag)}""",
-            """"rows_renamed":${result.rowsRenamed}""",
-            """"rows_dropped_as_dupes":${result.rowsDeletedAsDupes}""",
-        ).joinToString(separator = ",", prefix = "{", postfix = "}")
-
-    /**
-     * Minimal JSON-string encoder for the audit `afterJson` payload.
-     * The guidance arrives as untrusted operator text, so quotes /
-     * backslashes / control characters need escaping before they're
-     * embedded in a JSON literal. Kept inline rather than pulling
-     * in the Jackson mapper just for this one field.
-     */
-    private fun jsonStringLiteral(text: String): String {
-        val escaped =
-            text
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t")
-        return "\"$escaped\""
-    }
-
-    private fun jsonStringArray(values: List<String>): String =
-        values.joinToString(separator = ",", prefix = "[", postfix = "]") { jsonStringLiteral(it) }
-
-    // -------- shared projection --------
-
-    private fun projectTopic(topic: Topic): Map<String, Any?> =
-        mapOf(
-            "slug" to topic.slug,
-            "description" to topic.description,
-            "aliases" to topic.aliases.toList().sorted(),
-            "created_at" to topic.createdAt.toString(),
-            "created_by" to topic.createdBy,
-            "updated_at" to topic.updatedAt.toString(),
-            "is_active" to topic.isActive,
-        )
 }
+
+private fun reclassifyAuditPayload(guidance: String?): String =
+    if (guidance != null) {
+        """{"guidance":${jsonStringLiteral(guidance)}}"""
+    } else {
+        "{}"
+    }
+
+private fun renameTagBeforePayload(fromTag: String): String = """{"tag":${jsonStringLiteral(fromTag)}}"""
+
+private fun renameTagAfterPayload(
+    toTag: String,
+    rowsTouched: Int,
+): String = """{"tag":${jsonStringLiteral(toTag)},"rows_touched":$rowsTouched}"""
+
+private fun mergeTagsBeforePayload(fromTags: List<String>): String = """{"from":${jsonStringArray(fromTags)}}"""
+
+private fun projectMergeTagsResult(
+    fromTags: List<String>,
+    intoTag: String,
+    result: TopicRepository.MergeTagsResult,
+    actor: String,
+    auditId: String?,
+): Map<String, Any?> =
+    buildMap {
+        put("from", fromTags)
+        put("into", intoTag)
+        put("rows_renamed", result.rowsRenamed)
+        put("rows_dropped_as_dupes", result.rowsDeletedAsDupes)
+        put("actor", actor)
+        if (auditId != null) put("audit_id", auditId)
+    }
+
+private fun mergeTagsAfterPayload(
+    intoTag: String,
+    result: TopicRepository.MergeTagsResult,
+): String =
+    listOf(
+        """"into":${jsonStringLiteral(intoTag)}""",
+        """"rows_renamed":${result.rowsRenamed}""",
+        """"rows_dropped_as_dupes":${result.rowsDeletedAsDupes}""",
+    ).joinToString(separator = ",", prefix = "{", postfix = "}")
+
+/**
+ * Minimal JSON-string encoder for audit payloads. Operator text can contain
+ * quotes, backslashes, or control characters, so escape it before embedding.
+ */
+private fun jsonStringLiteral(text: String): String {
+    val escaped =
+        text
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+    return "\"$escaped\""
+}
+
+private fun jsonStringArray(values: List<String>): String =
+    values.joinToString(separator = ",", prefix = "[", postfix = "]") { jsonStringLiteral(it) }
+
+private fun projectTopic(topic: Topic): Map<String, Any?> =
+    mapOf(
+        "slug" to topic.slug,
+        "description" to topic.description,
+        "aliases" to topic.aliases.toList().sorted(),
+        "created_at" to topic.createdAt.toString(),
+        "created_by" to topic.createdBy,
+        "updated_at" to topic.updatedAt.toString(),
+        "is_active" to topic.isActive,
+    )

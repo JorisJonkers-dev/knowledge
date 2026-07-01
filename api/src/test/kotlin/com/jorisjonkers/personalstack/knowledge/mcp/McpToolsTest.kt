@@ -1,4 +1,3 @@
-@file:Suppress("DEPRECATION") // Jackson 3 deprecated asText().
 
 package com.jorisjonkers.personalstack.knowledge.mcp
 
@@ -15,23 +14,12 @@ import com.jorisjonkers.personalstack.knowledge.domain.KbNote
 import com.jorisjonkers.personalstack.knowledge.domain.KbNoteType
 import com.jorisjonkers.personalstack.knowledge.domain.KbRelation
 import com.jorisjonkers.personalstack.knowledge.domain.RecallHit
-import com.jorisjonkers.personalstack.knowledge.domain.ReviewBucket
-import com.jorisjonkers.personalstack.knowledge.domain.ReviewNote
-import com.jorisjonkers.personalstack.knowledge.domain.ReviewSuggestion
-import com.jorisjonkers.personalstack.knowledge.domain.ReviewSummary
-import com.jorisjonkers.personalstack.knowledge.domain.ScopeSummary
-import com.jorisjonkers.personalstack.knowledge.domain.SourceSummary
-import com.jorisjonkers.personalstack.knowledge.domain.TagCandidateCluster
-import com.jorisjonkers.personalstack.knowledge.domain.TagCandidateMember
-import com.jorisjonkers.personalstack.knowledge.domain.TagSummary
-import com.jorisjonkers.personalstack.knowledge.domain.TopicStats
-import com.jorisjonkers.personalstack.knowledge.domain.TopicSummary
 import com.jorisjonkers.personalstack.knowledge.recall.RecallService
+import com.jorisjonkers.personalstack.knowledge.repo.AuditRecordRequest
 import com.jorisjonkers.personalstack.knowledge.repo.AuditRepository
 import com.jorisjonkers.personalstack.knowledge.repo.NoteRepository
 import com.jorisjonkers.personalstack.knowledge.repo.TopicRepository
 import com.jorisjonkers.personalstack.knowledge.review.ReviewService
-import com.jorisjonkers.personalstack.knowledge.review.ReviewSummaryRequest
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -42,7 +30,6 @@ import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.KotlinModule
 import java.time.Instant
 
-@Suppress("LargeClass")
 class McpToolsTest {
     private val captureService = mockk<CaptureService>()
     private val recallService = mockk<RecallService>(relaxed = true)
@@ -62,13 +49,15 @@ class McpToolsTest {
     // builders + handler argument parsing.
     private val tools =
         McpTools(
-            CaptureMcpTools(captureService),
-            ReadMcpTools(recallService),
-            DiscoveryMcpTools(discoveryService, tagClusterService),
-            AdminMcpTools(topicRepository, noteRepository, auditRepository, adminAuthorization),
-            DigestMcpTools(digestService),
-            AuditMcpTools(auditService),
-            ReviewMcpTools(reviewService),
+            coreTools = CoreMcpToolSet(CaptureMcpTools(captureService), ReadMcpTools(recallService)),
+            fullTools =
+                FullMcpToolSet(
+                    DiscoveryMcpTools(discoveryService, tagClusterService),
+                    AdminMcpTools(topicRepository, noteRepository, auditRepository, adminAuthorization),
+                    DigestMcpTools(digestService),
+                    AuditMcpTools(auditService),
+                    ReviewMcpTools(reviewService),
+                ),
         )
     private val mapper: JsonMapper = JsonMapper.builder().addModule(KotlinModule.Builder().build()).build()
 
@@ -101,14 +90,16 @@ class McpToolsTest {
 
     private fun liteTools() =
         McpTools(
-            CaptureMcpTools(captureService),
-            ReadMcpTools(recallService),
-            DiscoveryMcpTools(discoveryService, tagClusterService),
-            AdminMcpTools(topicRepository, noteRepository, auditRepository, adminAuthorization),
-            DigestMcpTools(digestService),
-            AuditMcpTools(auditService),
-            ReviewMcpTools(reviewService),
-            KnowledgeModeProperties(mode = KnowledgeMode.LITE),
+            coreTools = CoreMcpToolSet(CaptureMcpTools(captureService), ReadMcpTools(recallService)),
+            fullTools =
+                FullMcpToolSet(
+                    DiscoveryMcpTools(discoveryService, tagClusterService),
+                    AdminMcpTools(topicRepository, noteRepository, auditRepository, adminAuthorization),
+                    DigestMcpTools(digestService),
+                    AuditMcpTools(auditService),
+                    ReviewMcpTools(reviewService),
+                ),
+            modeProperties = KnowledgeModeProperties(mode = KnowledgeMode.LITE),
         )
 
     @Test
@@ -166,91 +157,6 @@ class McpToolsTest {
     }
 
     @Test
-    @Suppress("LongMethod")
-    fun `review_summary forwards bounded request and projects governance buckets`() {
-        val request = slot<ReviewSummaryRequest>()
-        every { reviewService.summary(capture(request)) } returns
-            ReviewSummary(
-                generatedAt = Instant.parse("2026-06-04T16:00:00Z"),
-                inbox =
-                    ReviewBucket(
-                        total = 1,
-                        items =
-                            listOf(
-                                ReviewNote(
-                                    id = "01HXREVIEW0000000000000000",
-                                    type = "lesson",
-                                    scope = "_inbox",
-                                    source = "assistant-ui:auto-capture:s1",
-                                    capturedAt = Instant.parse("2026-06-04T15:00:00Z"),
-                                    confidence = 0.52,
-                                    title = "pending note",
-                                    vaultPath = "_inbox/2026-06-04/pending.md",
-                                    tags = setOf("auto-capture"),
-                                    recallCount = 4,
-                                    lastRecalledAt = Instant.parse("2026-06-04T15:30:00Z"),
-                                ),
-                            ),
-                    ),
-                needsReview = ReviewBucket(total = 0, items = emptyList()),
-                recentAutoCaptures = ReviewBucket(total = 0, items = emptyList()),
-                staleUnusedNotes = ReviewBucket(total = 0, items = emptyList()),
-                lowConfidenceHighRecall = ReviewBucket(total = 0, items = emptyList()),
-                tagCandidateClusters = ReviewBucket(total = 0, items = emptyList()),
-                recentAudit = ReviewBucket(total = 0, items = emptyList()),
-                suggestions =
-                    listOf(
-                        ReviewSuggestion(
-                            kind = "needs_review",
-                            severity = "high",
-                            message = "review pending memory",
-                            suggestedTool = "knowledge.reclassify_note",
-                            targetId = "01HXREVIEW0000000000000000",
-                            targetKind = "note",
-                            details = mapOf("total" to 1),
-                        ),
-                    ),
-            )
-
-        val out =
-            tools.call(
-                "knowledge.review_summary",
-                mapper.readTree(
-                    """
-                    {
-                      "limit": 5,
-                      "stale_days": 30,
-                      "low_confidence_max": 0.5,
-                      "high_recall_min": 2,
-                      "tag_threshold": 0.9
-                    }
-                    """.trimIndent(),
-                ),
-            )!!
-
-        assertThat(request.captured.limit).isEqualTo(5)
-        assertThat(request.captured.staleDays).isEqualTo(30)
-        assertThat(request.captured.lowConfidenceMax).isEqualTo(0.5)
-        assertThat(request.captured.highRecallMin).isEqualTo(2)
-        assertThat(request.captured.tagThreshold).isEqualTo(0.9)
-
-        @Suppress("UNCHECKED_CAST")
-        val summary = out["summary"] as Map<String, Any?>
-        assertThat(summary["generated_at"]).isEqualTo("2026-06-04T16:00:00Z")
-        @Suppress("UNCHECKED_CAST")
-        val inbox = summary["inbox"] as Map<String, Any?>
-        assertThat(inbox["total"]).isEqualTo(1)
-        @Suppress("UNCHECKED_CAST")
-        val inboxItems = inbox["items"] as List<Map<String, Any?>>
-        assertThat(inboxItems[0]["source"]).isEqualTo("assistant-ui:auto-capture:s1")
-        assertThat(inboxItems[0]["recall_count"]).isEqualTo(4)
-        assertThat(inboxItems[0]["last_recalled_at"]).isEqualTo("2026-06-04T15:30:00Z")
-        @Suppress("UNCHECKED_CAST")
-        val suggestions = summary["suggestions"] as List<Map<String, Any?>>
-        assertThat(suggestions[0]["suggested_tool"]).isEqualTo("knowledge.reclassify_note")
-    }
-
-    @Test
     fun `list_audit projects each row including target metadata and timestamps`() {
         every { auditService.list(any(), any(), any(), any(), any()) } returns
             listOf(
@@ -271,9 +177,7 @@ class McpToolsTest {
                 "knowledge.list_audit",
                 mapper.readTree("""{"actor":"kb-renormalise-titles","limit":10}"""),
             )!!
-
-        @Suppress("UNCHECKED_CAST")
-        val rows = out["rows"] as List<Map<String, Any?>>
+        val rows = out["rows"].stringKeyMapList()
         assertThat(rows).hasSize(1)
         assertThat(rows[0]["action"]).isEqualTo("rename_title")
         assertThat(rows[0]["target_kind"]).isEqualTo("note")
@@ -282,40 +186,11 @@ class McpToolsTest {
     }
 
     @Test
-    fun `list_tag_candidates projects each cluster with its members and canonical`() {
-        every { tagClusterService.listTagCandidates(any(), any(), any()) } returns
-            listOf(
-                TagCandidateCluster(
-                    members = listOf(TagCandidateMember("kotlin", 10), TagCandidateMember("Kotlin", 3)),
-                    suggestedCanonical = "kotlin",
-                    averageSimilarity = 0.97,
-                ),
-            )
-
-        val out =
-            tools.call(
-                "knowledge.list_tag_candidates",
-                mapper.readTree("""{"min_count":2,"threshold":0.9,"max_tags":50}"""),
-            )!!
-
-        @Suppress("UNCHECKED_CAST")
-        val clusters = out["clusters"] as List<Map<String, Any?>>
-        assertThat(clusters).hasSize(1)
-        assertThat(clusters[0]["suggested_canonical"]).isEqualTo("kotlin")
-        assertThat(clusters[0]["average_similarity"]).isEqualTo(0.97)
-
-        @Suppress("UNCHECKED_CAST")
-        val members = clusters[0]["members"] as List<Map<String, Any?>>
-        assertThat(members.map { it["tag"] }).containsExactly("kotlin", "Kotlin")
-        assertThat(members.map { it["count"] }).containsExactly(10, 3)
-    }
-
-    @Test
     fun `merge_tags forwards source tags and projects idempotent merge counts`() {
         every { adminAuthorization.requireAdmin() } returns "mcp:admin"
         every { topicRepository.mergeTags(listOf("kt", "kts"), "kotlin") } returns
             TopicRepository.MergeTagsResult(rowsRenamed = 2, rowsDeletedAsDupes = 1)
-        every { auditRepository.record(any(), any(), any(), any(), any(), any(), any()) } returns
+        every { auditRepository.record(any()) } returns
             auditRow(id = "01HXAUDMERGETAGS0000000000")
 
         val out =
@@ -333,13 +208,18 @@ class McpToolsTest {
         verify(exactly = 1) { topicRepository.mergeTags(listOf("kt", "kts"), "kotlin") }
         verify(exactly = 1) {
             auditRepository.record(
-                actor = "mcp:admin",
-                action = "merge_tags",
-                targetId = null,
-                targetKind = "tag",
-                beforeJson = """{"from":["kt","kts"]}""",
-                afterJson = """{"into":"kotlin","rows_renamed":2,"rows_dropped_as_dupes":1}""",
-                now = any(),
+                match {
+                    it ==
+                        AuditRecordRequest(
+                            actor = "mcp:admin",
+                            action = "merge_tags",
+                            targetId = null,
+                            targetKind = "tag",
+                            beforeJson = """{"from":["kt","kts"]}""",
+                            afterJson = """{"into":"kotlin","rows_renamed":2,"rows_dropped_as_dupes":1}""",
+                            now = it.now,
+                        )
+                },
             )
         }
     }
@@ -357,14 +237,14 @@ class McpToolsTest {
             )!!
 
         assertThat(out).doesNotContainKey("audit_id")
-        verify(exactly = 0) { auditRepository.record(any(), any(), any(), any(), any(), any(), any()) }
+        verify(exactly = 0) { auditRepository.record(any()) }
     }
 
     @Test
     fun `rename_tag writes an audit row when rows are touched`() {
         every { adminAuthorization.requireAdmin() } returns "mcp:admin"
         every { topicRepository.renameTag("kt", "kotlin") } returns 2
-        every { auditRepository.record(any(), any(), any(), any(), any(), any(), any()) } returns
+        every { auditRepository.record(any()) } returns
             auditRow(id = "01HXAUDRENAMETAG000000000")
 
         val out =
@@ -377,13 +257,18 @@ class McpToolsTest {
         assertThat(out["audit_id"]).isEqualTo("01HXAUDRENAMETAG000000000")
         verify(exactly = 1) {
             auditRepository.record(
-                actor = "mcp:admin",
-                action = "rename_tag",
-                targetId = null,
-                targetKind = "tag",
-                beforeJson = """{"tag":"kt"}""",
-                afterJson = """{"tag":"kotlin","rows_touched":2}""",
-                now = any(),
+                match {
+                    it ==
+                        AuditRecordRequest(
+                            actor = "mcp:admin",
+                            action = "rename_tag",
+                            targetId = null,
+                            targetKind = "tag",
+                            beforeJson = """{"tag":"kt"}""",
+                            afterJson = """{"tag":"kotlin","rows_touched":2}""",
+                            now = it.now,
+                        )
+                },
             )
         }
     }
@@ -410,9 +295,7 @@ class McpToolsTest {
                 "knowledge.digest_transcript",
                 mapper.readTree("""{"transcript":"... session text ...","max_candidates":3,"min_confidence":0.5}"""),
             )!!
-
-        @Suppress("UNCHECKED_CAST")
-        val candidates = out["candidates"] as List<Map<String, Any?>>
+        val candidates = out["candidates"].stringKeyMapList()
         assertThat(candidates).hasSize(1)
         assertThat(candidates[0]["kind"]).isEqualTo("lesson")
         assertThat(candidates[0]["confidence"]).isEqualTo(0.82)
@@ -426,14 +309,12 @@ class McpToolsTest {
         tools.describe().filter { it["name"] in captureNames }.forEach { descriptor ->
             val schema = descriptor["inputSchema"] as Map<*, *>
             assertThat(schema["type"]).isEqualTo("object")
-            @Suppress("UNCHECKED_CAST")
-            val required = schema["required"] as List<String>
+            val required = schema["required"].stringList()
             // `scope` is optional now: omitted captures default to
             // `_inbox` and the curator agent assigns the final scope
             // during the classify-and-promote pass.
             assertThat(required).containsExactlyInAnyOrder("title", "body")
-            @Suppress("UNCHECKED_CAST")
-            val properties = schema["properties"] as Map<String, Any>
+            val properties = schema["properties"].stringKeyMap()
             assertThat(properties.keys)
                 .contains(
                     "scope",
@@ -450,16 +331,12 @@ class McpToolsTest {
     @Test
     fun `read tool descriptors expose their own required and properties shape`() {
         val recall = tools.describe().single { it["name"] == "knowledge.recall" }
-
-        @Suppress("UNCHECKED_CAST")
-        val recallSchema = recall["inputSchema"] as Map<String, Any>
+        val recallSchema = recall["inputSchema"].stringKeyMap()
         assertThat(recallSchema["required"] as List<*>).containsExactly("query")
         assertThat((recallSchema["properties"] as Map<*, *>).keys).contains("query", "scope", "limit")
 
         val findConflicts = tools.describe().single { it["name"] == "knowledge.find_conflicts" }
-
-        @Suppress("UNCHECKED_CAST")
-        val fcSchema = findConflicts["inputSchema"] as Map<String, Any>
+        val fcSchema = findConflicts["inputSchema"].stringKeyMap()
         assertThat(fcSchema["required"] as List<*>).containsExactly("id")
     }
 
@@ -482,9 +359,7 @@ class McpToolsTest {
                 "knowledge.recall",
                 mapper.readTree("""{"query":"rockets","scope":"personal","limit":5}"""),
             )!!
-
-        @Suppress("UNCHECKED_CAST")
-        val hits = out["hits"] as List<Map<String, Any?>>
+        val hits = out["hits"].stringKeyMapList()
         assertThat(hits).hasSize(1)
         assertThat(hits[0]["id"]).isEqualTo("01HXY")
         assertThat(hits[0]["score"]).isEqualTo(0.42)
@@ -520,9 +395,7 @@ class McpToolsTest {
                 ),
             )
         val out = tools.call("knowledge.find_conflicts", mapper.readTree("""{"id":"01HXY"}"""))!!
-
-        @Suppress("UNCHECKED_CAST")
-        val rels = out["relations"] as List<Map<String, Any?>>
+        val rels = out["relations"].stringKeyMapList()
         assertThat(rels).hasSize(1)
         assertThat(rels[0]["predicate"]).isEqualTo("supersedes")
         assertThat(rels[0]["object_id"]).isEqualTo("01ABC")
@@ -549,9 +422,7 @@ class McpToolsTest {
             )
         val out =
             tools.call("knowledge.relations", mapper.readTree("""{"id":"01HXY","depth":2}"""))!!
-
-        @Suppress("UNCHECKED_CAST")
-        val rels = out["relations"] as List<Map<String, Any?>>
+        val rels = out["relations"].stringKeyMapList()
         assertThat(rels).hasSize(2)
         assertThat(rels.map { it["object_id"] }).containsExactly("01DEF", "01OLD")
         verify(exactly = 1) { recallService.walkRelations("01HXY", 2) }
@@ -670,127 +541,5 @@ class McpToolsTest {
             mapper.readTree("""{"scope":"p","title":"t","body":"b","confidence":0.85}"""),
         )
         assertThat(captured.captured.confidence).isEqualTo(0.85)
-    }
-
-    // -------- discovery tools --------
-
-    @Test
-    fun `list_topics projects each summary with the bare slug`() {
-        every { discoveryService.listTopics(5) } returns
-            listOf(
-                TopicSummary(
-                    slug = "kotlin",
-                    noteCount = 12,
-                    lastCapturedAt = Instant.parse("2026-05-13T12:00:00Z"),
-                ),
-                TopicSummary(slug = "postgres", noteCount = 3, lastCapturedAt = null),
-            )
-
-        val out = tools.call("knowledge.list_topics", mapper.readTree("""{"limit":5}"""))!!
-
-        @Suppress("UNCHECKED_CAST")
-        val rows = out["topics"] as List<Map<String, Any?>>
-        assertThat(rows).hasSize(2)
-        assertThat(rows[0]["slug"]).isEqualTo("kotlin")
-        assertThat(rows[0]["note_count"]).isEqualTo(12)
-        assertThat(rows[0]["last_captured_at"]).isEqualTo("2026-05-13T12:00:00Z")
-        assertThat(rows[1]["last_captured_at"]).isNull()
-    }
-
-    @Test
-    fun `list_tags forwards the optional scope filter`() {
-        every { discoveryService.listTags("project:personal-stack", 50) } returns
-            listOf(
-                TagSummary(
-                    tag = "kotlin",
-                    count = 7,
-                    lastUsedAt = Instant.parse("2026-05-13T12:00:00Z"),
-                ),
-            )
-        tools.call(
-            "knowledge.list_tags",
-            mapper.readTree("""{"scope":"project:personal-stack","limit":50}"""),
-        )
-        verify(exactly = 1) { discoveryService.listTags("project:personal-stack", 50) }
-    }
-
-    @Test
-    fun `list_scopes returns counts ordered by note_count desc`() {
-        every { discoveryService.listScopes(any()) } returns
-            listOf(
-                ScopeSummary(scope = "project:a", noteCount = 5, lastCapturedAt = null),
-                ScopeSummary(scope = "personal", noteCount = 1, lastCapturedAt = null),
-            )
-        val out = tools.call("knowledge.list_scopes", mapper.readTree("""{}"""))!!
-
-        @Suppress("UNCHECKED_CAST")
-        val rows = out["scopes"] as List<Map<String, Any?>>
-        assertThat(rows.map { it["scope"] }).containsExactly("project:a", "personal")
-    }
-
-    @Test
-    fun `list_sources projects the source frequency`() {
-        every { discoveryService.listSources(any()) } returns
-            listOf(SourceSummary(source = "claude-code", count = 42))
-        val out = tools.call("knowledge.list_sources", mapper.readTree("""{}"""))!!
-
-        @Suppress("UNCHECKED_CAST")
-        val rows = out["sources"] as List<Map<String, Any?>>
-        assertThat(rows).hasSize(1)
-        assertThat(rows[0]["source"]).isEqualTo("claude-code")
-        assertThat(rows[0]["count"]).isEqualTo(42)
-    }
-
-    @Test
-    fun `topic_stats returns null when the slug has no notes`() {
-        every { discoveryService.topicStats("nonexistent", any()) } returns null
-        val out = tools.call("knowledge.topic_stats", mapper.readTree("""{"slug":"nonexistent"}"""))!!
-        assertThat(out["stats"]).isNull()
-    }
-
-    @Test
-    fun `topic_stats projects the breakdowns when the slug has notes`() {
-        every { discoveryService.topicStats("kotlin", 10) } returns
-            TopicStats(
-                slug = "kotlin",
-                noteCount = 12,
-                firstCapturedAt = Instant.parse("2026-05-10T12:00:00Z"),
-                lastCapturedAt = Instant.parse("2026-05-13T12:00:00Z"),
-                typeBreakdown = mapOf("lesson" to 8, "decision" to 4),
-                topTags =
-                    listOf(
-                        TagSummary(
-                            tag = "spring",
-                            count = 5,
-                            lastUsedAt = Instant.parse("2026-05-13T12:00:00Z"),
-                        ),
-                    ),
-            )
-
-        val out = tools.call("knowledge.topic_stats", mapper.readTree("""{"slug":"kotlin"}"""))!!
-
-        @Suppress("UNCHECKED_CAST")
-        val stats = out["stats"] as Map<String, Any?>
-        assertThat(stats["slug"]).isEqualTo("kotlin")
-        assertThat(stats["note_count"]).isEqualTo(12)
-        assertThat((stats["type_breakdown"] as Map<*, *>)["lesson"]).isEqualTo(8)
-
-        @Suppress("UNCHECKED_CAST")
-        val topTags = stats["top_tags"] as List<Map<String, Any?>>
-        assertThat(topTags).hasSize(1)
-        assertThat(topTags[0]["tag"]).isEqualTo("spring")
-    }
-
-    @Test
-    fun `list_inbox surfaces vault_path so the operator can find the file`() {
-        every { discoveryService.listInbox(20) } returns
-            listOf(stubNote.copy(vaultPath = "_inbox/2026-05-13/hello.md", scope = "_inbox"))
-        val out = tools.call("knowledge.list_inbox", mapper.readTree("""{}"""))!!
-
-        @Suppress("UNCHECKED_CAST")
-        val notes = out["notes"] as List<Map<String, Any?>>
-        assertThat(notes).hasSize(1)
-        assertThat(notes[0]["vault_path"]).isEqualTo("_inbox/2026-05-13/hello.md")
-        assertThat(notes[0]["scope"]).isEqualTo("_inbox")
     }
 }

@@ -28,70 +28,77 @@ import org.springframework.web.context.WebApplicationContext
         "knowledge.installer.kb-url=https://kb.example.test",
     ],
 )
-class InstallerControllerIntegrationTest : IntegrationTestBase() {
+class InstallerControllerIntegrationTest
     @Autowired
-    private lateinit var context: WebApplicationContext
+    constructor(
+        private val context: WebApplicationContext,
+    ) : IntegrationTestBase() {
+        private lateinit var mockMvc: MockMvc
 
-    private lateinit var mockMvc: MockMvc
+        @BeforeEach
+        fun setUp() {
+            mockMvc = MockMvcBuilders.webAppContextSetup(context).build()
+        }
 
-    @BeforeEach
-    fun setUp() {
-        mockMvc = MockMvcBuilders.webAppContextSetup(context).build()
+        @Test
+        fun installShServesABashScriptTemplatedWithTheConfiguredKbUrl() {
+            val result = mockMvc.get("/install.sh").andReturn()
+
+            assertThat(result.response.status).isEqualTo(
+                org.springframework.http.HttpStatus.OK
+                    .value(),
+            )
+            assertThat(result.response.contentType).startsWith("text/x-shellscript")
+
+            val body = result.response.contentAsString
+            // Shebang lets `curl … | bash` pipes work, and lets the user
+            // also save + chmod the file as a standalone executable.
+            assertThat(body).startsWith("#!/usr/bin/env bash")
+            // The kb-url token gets substituted into the script body in
+            // multiple places (KB_URL constant + help text). One match is
+            // enough to prove the substitution ran.
+            assertThat(body).contains("https://kb.example.test")
+            // Negative assertion: every placeholder is gone. A leftover
+            // `@KB_URL@` or `@VERSION@` is a sign the templater missed a
+            // site.
+            assertThat(body).doesNotContain("@KB_URL@")
+            assertThat(body).doesNotContain("@VERSION@")
+            // The managed paths must be present so the operator's uninstall
+            // path knows what to remove. The install script references them
+            // via `${SKILLS_DIR}/<name>/SKILL.md` shell expansion, so we
+            // assert on the trailing path segment only.
+            assertThat(body).contains("user-prompt-submit-recall.sh")
+            assertThat(body).contains("topics/SKILL.md")
+            assertThat(body).contains("audit/SKILL.md")
+            assertThat(body).contains("kb-first/SKILL.md")
+            assertThat(body).contains("token-economy/SKILL.md")
+            assertThat(body).contains("agent-session-bootstrap/SKILL.md")
+            assertThat(body).contains("KB_RECALL_HOOK_MODE")
+            assertThat(body).contains("KB_DIGEST_MAX_CHARS")
+            assertThat(body).contains("KB_DIGEST_DEDUPE_SCORE")
+            assertThat(body).contains("KB_MCP_URL")
+        }
+
+        @Test
+        fun installAgentsShServesABashScriptTemplatedWithTheConfiguredKbUrl() {
+            val result = mockMvc.get("/install-agents.sh").andReturn()
+
+            assertThat(result.response.status).isEqualTo(
+                org.springframework.http.HttpStatus.OK
+                    .value(),
+            )
+            assertThat(result.response.contentType).startsWith("text/x-shellscript")
+
+            val body = result.response.contentAsString
+            assertThat(body).startsWith("#!/usr/bin/env bash")
+            assertThat(body).contains("https://kb.example.test")
+            assertThat(body).doesNotContain("@KB_URL@")
+            assertThat(body).doesNotContain("@VERSION@")
+            // This installer is a thin wrapper that delegates the base
+            // install by fetching the sibling install.sh from the same KB.
+            assertThat(body).contains("/install.sh")
+            // The new capability over the base installer: registering the
+            // knowledge MCP server with each agent.
+            assertThat(body).contains("mcp_servers.knowledge")
+        }
     }
-
-    @Test
-    fun `install_sh serves a bash script templated with the configured kb url`() {
-        val result = mockMvc.get("/install.sh").andReturn()
-
-        assertThat(result.response.status).isEqualTo(200)
-        assertThat(result.response.contentType).startsWith("text/x-shellscript")
-
-        val body = result.response.contentAsString
-        // Shebang lets `curl … | bash` pipes work, and lets the user
-        // also save + chmod the file as a standalone executable.
-        assertThat(body).startsWith("#!/usr/bin/env bash")
-        // The kb-url token gets substituted into the script body in
-        // multiple places (KB_URL constant + help text). One match is
-        // enough to prove the substitution ran.
-        assertThat(body).contains("https://kb.example.test")
-        // Negative assertion: every placeholder is gone. A leftover
-        // `@KB_URL@` or `@VERSION@` is a sign the templater missed a
-        // site.
-        assertThat(body).doesNotContain("@KB_URL@")
-        assertThat(body).doesNotContain("@VERSION@")
-        // The managed paths must be present so the operator's uninstall
-        // path knows what to remove. The install script references them
-        // via `${SKILLS_DIR}/<name>/SKILL.md` shell expansion, so we
-        // assert on the trailing path segment only.
-        assertThat(body).contains("user-prompt-submit-recall.sh")
-        assertThat(body).contains("topics/SKILL.md")
-        assertThat(body).contains("audit/SKILL.md")
-        assertThat(body).contains("kb-first/SKILL.md")
-        assertThat(body).contains("token-economy/SKILL.md")
-        assertThat(body).contains("agent-session-bootstrap/SKILL.md")
-        assertThat(body).contains("KB_RECALL_HOOK_MODE")
-        assertThat(body).contains("KB_DIGEST_MAX_CHARS")
-        assertThat(body).contains("KB_DIGEST_DEDUPE_SCORE")
-        assertThat(body).contains("KB_MCP_URL")
-    }
-
-    @Test
-    fun `install-agents_sh serves a bash script templated with the configured kb url`() {
-        val result = mockMvc.get("/install-agents.sh").andReturn()
-
-        assertThat(result.response.status).isEqualTo(200)
-        assertThat(result.response.contentType).startsWith("text/x-shellscript")
-
-        val body = result.response.contentAsString
-        assertThat(body).startsWith("#!/usr/bin/env bash")
-        assertThat(body).contains("https://kb.example.test")
-        assertThat(body).doesNotContain("@KB_URL@")
-        assertThat(body).doesNotContain("@VERSION@")
-        // This installer is a thin wrapper that delegates the base
-        // install by fetching the sibling install.sh from the same KB.
-        assertThat(body).contains("/install.sh")
-        // The new capability over the base installer: registering the
-        // knowledge MCP server with each agent.
-        assertThat(body).contains("mcp_servers.knowledge")
-    }
-}

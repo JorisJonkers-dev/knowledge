@@ -14,12 +14,11 @@ import org.testcontainers.rabbitmq.RabbitMQContainer
 @Tag("integration")
 @SpringBootTest
 @Testcontainers
-abstract class IntegrationTestBase {
-    @Autowired
-    private lateinit var dsl: DSLContext
-
+open class IntegrationTestBase {
     @AfterEach
-    fun resetSharedState() {
+    fun resetSharedState(
+        @Autowired dsl: DSLContext,
+    ) {
         dsl.execute(
             "TRUNCATE TABLE kb_notes, kb_note_tags, kb_relations, kb_audit " +
                 "RESTART IDENTITY CASCADE",

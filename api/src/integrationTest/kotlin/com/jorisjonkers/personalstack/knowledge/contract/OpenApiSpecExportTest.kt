@@ -60,44 +60,45 @@ import java.nio.file.Paths
         KnowledgeReviewController::class,
     ],
 )
-class OpenApiSpecExportTest {
+class OpenApiSpecExportTest
     @Autowired
-    private lateinit var mockMvc: MockMvc
-
-    @Test
-    fun `export OpenAPI spec to repo root`() {
-        OpenApiSliceExporter.writeJson(mockMvc, resolveOpenApiSpecPath(), "/api/v1/api-docs")
-    }
-
-    private fun resolveOpenApiSpecPath(): Path {
-        // The Gradle task sets `openapi.spec.output` to the canonical
-        // committed location. Fallback to `<cwd>/knowledge-api.json` when run
-        // directly from the IDE so a one-off invocation still works.
-        val override = System.getProperty("openapi.spec.output")
-        if (override != null) {
-            return Paths.get(override)
+    constructor(
+        private val mockMvc: MockMvc,
+    ) {
+        @Test
+        fun exportOpenApiSpecToRepoRoot() {
+            OpenApiSliceExporter.writeJson(mockMvc, resolveOpenApiSpecPath(), "/api/v1/api-docs")
         }
-        return Paths.get(System.getProperty("user.dir")).resolve("knowledge-api.json")
+
+        private fun resolveOpenApiSpecPath(): Path {
+            // The Gradle task sets `openapi.spec.output` to the canonical
+            // committed location. Fallback to `<cwd>/knowledge-api.json` when run
+            // directly from the IDE so a one-off invocation still works.
+            val override = System.getProperty("openapi.spec.output")
+            if (override != null) {
+                return Paths.get(override)
+            }
+            return Paths.get(System.getProperty("user.dir")).resolve("knowledge-api.json")
+        }
+
+        @SpringBootConfiguration
+        class Application
+
+        @TestConfiguration(proxyBeanMethods = false)
+        class Collaborators {
+            @Bean
+            fun auditService(): AuditService = mockk(relaxed = true)
+
+            @Bean
+            fun discoveryService(): DiscoveryService = mockk(relaxed = true)
+
+            @Bean
+            fun recallService(): RecallService = mockk(relaxed = true)
+
+            @Bean
+            fun reviewService(): ReviewService = mockk(relaxed = true)
+
+            @Bean
+            fun tagClusterService(): TagClusterService = mockk(relaxed = true)
+        }
     }
-
-    @SpringBootConfiguration
-    class Application
-
-    @TestConfiguration(proxyBeanMethods = false)
-    class Collaborators {
-        @Bean
-        fun auditService(): AuditService = mockk(relaxed = true)
-
-        @Bean
-        fun discoveryService(): DiscoveryService = mockk(relaxed = true)
-
-        @Bean
-        fun recallService(): RecallService = mockk(relaxed = true)
-
-        @Bean
-        fun reviewService(): ReviewService = mockk(relaxed = true)
-
-        @Bean
-        fun tagClusterService(): TagClusterService = mockk(relaxed = true)
-    }
-}

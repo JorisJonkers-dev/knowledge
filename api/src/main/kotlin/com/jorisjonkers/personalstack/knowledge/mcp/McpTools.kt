@@ -11,28 +11,18 @@ import tools.jackson.databind.json.JsonMapper
  */
 @Component
 class McpTools(
-    captureTools: CaptureMcpTools,
-    readTools: ReadMcpTools,
-    discoveryTools: DiscoveryMcpTools,
-    adminTools: AdminMcpTools,
-    digestTools: DigestMcpTools,
-    auditTools: AuditMcpTools,
-    reviewTools: ReviewMcpTools,
+    coreTools: CoreMcpToolSet,
+    fullTools: FullMcpToolSet,
     modeProperties: KnowledgeModeProperties = KnowledgeModeProperties(),
 ) {
     private val tools: Map<String, McpTool> =
         buildList {
             // Core retrieval + capture surface — always registered.
-            addAll(captureTools.tools())
-            addAll(readTools.tools())
+            addAll(coreTools.tools())
             // Curator-governance surface — only in full mode. `lite` keeps a
             // thin recall+capture service (the lightweight-memory target).
             if (modeProperties.mode == KnowledgeMode.FULL) {
-                addAll(discoveryTools.tools())
-                addAll(adminTools.tools())
-                addAll(digestTools.tools())
-                addAll(auditTools.tools())
-                addAll(reviewTools.tools())
+                addAll(fullTools.tools())
             }
         }.associateBy { it.name }
 
@@ -46,4 +36,28 @@ class McpTools(
     private companion object {
         private val NULL_NODE: JsonNode = JsonMapper.builder().build().createObjectNode()
     }
+}
+
+@Component
+class CoreMcpToolSet(
+    private val captureTools: CaptureMcpTools,
+    private val readTools: ReadMcpTools,
+) {
+    fun tools(): List<McpTool> = captureTools.tools() + readTools.tools()
+}
+
+@Component
+class FullMcpToolSet(
+    private val discoveryTools: DiscoveryMcpTools,
+    private val adminTools: AdminMcpTools,
+    private val digestTools: DigestMcpTools,
+    private val auditTools: AuditMcpTools,
+    private val reviewTools: ReviewMcpTools,
+) {
+    fun tools(): List<McpTool> =
+        discoveryTools.tools() +
+            adminTools.tools() +
+            digestTools.tools() +
+            auditTools.tools() +
+            reviewTools.tools()
 }

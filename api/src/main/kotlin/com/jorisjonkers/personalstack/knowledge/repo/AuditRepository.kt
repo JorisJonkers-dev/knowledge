@@ -33,37 +33,29 @@ class AuditRepository(
      * wants to log "wrote audit <id>" doesn't need a follow-up
      * SELECT.
      */
-    fun record(
-        actor: String,
-        action: String,
-        targetId: String? = null,
-        targetKind: String? = null,
-        beforeJson: String? = null,
-        afterJson: String? = null,
-        now: Instant = Instant.now(),
-    ): KbAuditRow {
+    fun record(request: AuditRecordRequest): KbAuditRow {
         val id = Ulid.generate()
-        val ts = now.atOffset(ZoneOffset.UTC).toLocalDateTime()
+        val ts = request.now.atOffset(ZoneOffset.UTC).toLocalDateTime()
         dsl
             .insertInto(KB_AUDIT)
             .set(KB_AUDIT.ID, id)
-            .set(KB_AUDIT.ACTOR, actor)
-            .set(KB_AUDIT.ACTION, action)
-            .set(KB_AUDIT.TARGET_ID, targetId)
-            .set(KB_AUDIT.TARGET_KIND, targetKind)
-            .set(KB_AUDIT.BEFORE_JSON, beforeJson)
-            .set(KB_AUDIT.AFTER_JSON, afterJson)
+            .set(KB_AUDIT.ACTOR, request.actor)
+            .set(KB_AUDIT.ACTION, request.action)
+            .set(KB_AUDIT.TARGET_ID, request.targetId)
+            .set(KB_AUDIT.TARGET_KIND, request.targetKind)
+            .set(KB_AUDIT.BEFORE_JSON, request.beforeJson)
+            .set(KB_AUDIT.AFTER_JSON, request.afterJson)
             .set(KB_AUDIT.AT, ts)
             .execute()
         return KbAuditRow(
             id = id,
-            actor = actor,
-            action = action,
-            targetId = targetId,
-            targetKind = targetKind,
-            beforeJson = beforeJson,
-            afterJson = afterJson,
-            at = now,
+            actor = request.actor,
+            action = request.action,
+            targetId = request.targetId,
+            targetKind = request.targetKind,
+            beforeJson = request.beforeJson,
+            afterJson = request.afterJson,
+            at = request.now,
         )
     }
 
@@ -114,3 +106,13 @@ class AuditRepository(
             at = record.at?.toInstant(ZoneOffset.UTC) ?: Instant.EPOCH,
         )
 }
+
+data class AuditRecordRequest(
+    val actor: String,
+    val action: String,
+    val targetId: String? = null,
+    val targetKind: String? = null,
+    val beforeJson: String? = null,
+    val afterJson: String? = null,
+    val now: Instant = Instant.now(),
+)

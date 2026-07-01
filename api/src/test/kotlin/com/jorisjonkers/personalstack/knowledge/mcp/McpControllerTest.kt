@@ -58,8 +58,7 @@ class McpControllerTest {
         val body = response.body!!
         assertThat(body.id).isEqualTo(request.id)
         assertThat(body.error).isNull()
-        @Suppress("UNCHECKED_CAST")
-        val result = body.result as Map<String, Any?>
+        val result = body.result.stringKeyMap()
         assertThat(result["tools"]).isEqualTo(emptyList<Any>())
     }
 
@@ -77,5 +76,13 @@ class McpControllerTest {
         assertThat(response.statusCode.value()).isEqualTo(200)
         val body = response.body!!
         assertThat(body.error?.code).isEqualTo(JsonRpcErrorCodes.INVALID_REQUEST)
+    }
+
+    private fun Any?.stringKeyMap(): Map<String, Any?> {
+        val raw = this as? Map<*, *> ?: error("expected JSON-RPC result map")
+        return raw.entries.associate { (key, value) ->
+            check(key is String) { "expected string result key but got $key" }
+            key to value
+        }
     }
 }

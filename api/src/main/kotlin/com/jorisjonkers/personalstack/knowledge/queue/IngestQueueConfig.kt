@@ -1,4 +1,3 @@
-@file:Suppress("DEPRECATION")
 
 package com.jorisjonkers.personalstack.knowledge.queue
 

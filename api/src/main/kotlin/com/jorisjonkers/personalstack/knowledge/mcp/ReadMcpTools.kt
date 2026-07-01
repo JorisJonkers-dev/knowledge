@@ -1,4 +1,3 @@
-@file:Suppress("DEPRECATION") // Jackson 3 deprecated asText()/isTextual.
 
 package com.jorisjonkers.personalstack.knowledge.mcp
 
@@ -19,7 +18,6 @@ import tools.jackson.databind.JsonNode
  * planned follow-up, not the current deep implementation.
  */
 @Component
-@Suppress("TooManyFunctions") // Read-path descriptors, parsers, and projections stay co-located.
 class ReadMcpTools(
     private val recallService: RecallService,
 ) {
@@ -123,26 +121,6 @@ class ReadMcpTools(
                 ),
         )
 
-    private fun recallModeProperty() =
-        mapOf(
-            "type" to "string",
-            "enum" to RecallMode.entries.map { it.wire },
-            "description" to
-                "fast = FTS only; hybrid = FTS + vector + RRF; " +
-                "deep = hybrid + listwise reranker (LightRAG graph traversal is a planned follow-up).",
-        )
-
-    private fun recallScopeProperty() =
-        mapOf(
-            "type" to "string",
-            "description" to
-                "Restrict to a single scope (`topic:<slug>` / `project:<repo>` / " +
-                "`agent:<name>`). Pass `all` to include every scope including " +
-                "untriaged `_inbox`. Omit for the curated default — every " +
-                "scope except `_inbox` and assistant-private agent scopes " +
-                "(`agent:_shared` stays visible).",
-        )
-
     private fun recallHandler(args: JsonNode): Map<String, Any?> {
         // `query` is "required" by the schema, but a whitespace-only value
         // should produce zero hits, not a 500 — agents sometimes forward
@@ -204,62 +182,78 @@ class ReadMcpTools(
             )
         return mapOf("notes" to notes.map(::projectNote))
     }
-
-    // -------- projections --------
-
-    private fun projectNote(note: KbNote): Map<String, Any?> =
-        mapOf(
-            "id" to note.id,
-            "type" to note.type.wire,
-            "scope" to note.scope,
-            "source" to note.source,
-            "captured_at" to note.capturedAt.toString(),
-            "session_id" to note.sessionId,
-            "confidence" to note.confidence,
-            "title" to note.title,
-            "body" to note.body,
-            "vault_path" to note.vaultPath,
-            "vault_commit" to note.vaultCommit,
-            "tags" to note.tags.toList().sorted(),
-        )
-
-    private fun projectHit(hit: RecallHit): Map<String, Any?> =
-        mapOf(
-            "id" to hit.id,
-            "type" to hit.type,
-            "scope" to hit.scope,
-            "title" to hit.title,
-            "snippet" to hit.snippet,
-            "score" to hit.score,
-            "tags" to hit.tags.toList().sorted(),
-        )
-
-    private fun projectRelation(rel: KbRelation): Map<String, Any?> =
-        mapOf(
-            "subject_id" to rel.subjectId,
-            "predicate" to rel.predicate,
-            "object_id" to rel.objectId,
-            "props" to rel.props,
-            "created_at" to rel.createdAt.toString(),
-        )
-
-    companion object {
-        private const val DEFAULT_RECALL_LIMIT = 10
-        private const val DEFAULT_RECENT_LIMIT = 20
-        private const val MAX_LIMIT = 100
-        private const val DEFAULT_RELATION_DEPTH = 1
-
-        private const val RECALL_TOOL_DESCRIPTION =
-            "Layered recall over kb_notes. `mode=fast` is single-leg Postgres FTS (~50 ms p50). " +
-                "`mode=hybrid` adds the pgvector ANN leg and fuses with Reciprocal Rank Fusion " +
-                "(~100-300 ms once Ollama is warm). `mode=deep` runs hybrid retrieval, optionally " +
-                "fuses LightRAG graph context when `knowledge.recall.graph.enabled=true`, then " +
-                "applies a listwise reranker. Server-side default is " +
-                "configurable (`knowledge.recall.default-mode`); when omitted, the server's choice applies."
-
-        // Hard ceiling for the agent-facing depth; the repo enforces
-        // its own (private) ceiling underneath, so this just keeps the
-        // tool's input shape honest.
-        private const val MAX_RELATION_DEPTH = 4
-    }
 }
+
+private fun recallModeProperty() =
+    mapOf(
+        "type" to "string",
+        "enum" to RecallMode.entries.map { it.wire },
+        "description" to
+            "fast = FTS only; hybrid = FTS + vector + RRF; " +
+            "deep = hybrid + listwise reranker (LightRAG graph traversal is a planned follow-up).",
+    )
+
+private fun recallScopeProperty() =
+    mapOf(
+        "type" to "string",
+        "description" to
+            "Restrict to a single scope (`topic:<slug>` / `project:<repo>` / " +
+            "`agent:<name>`). Pass `all` to include every scope including " +
+            "untriaged `_inbox`. Omit for the curated default — every " +
+            "scope except `_inbox` and assistant-private agent scopes " +
+            "(`agent:_shared` stays visible).",
+    )
+
+private fun projectNote(note: KbNote): Map<String, Any?> =
+    mapOf(
+        "id" to note.id,
+        "type" to note.type.wire,
+        "scope" to note.scope,
+        "source" to note.source,
+        "captured_at" to note.capturedAt.toString(),
+        "session_id" to note.sessionId,
+        "confidence" to note.confidence,
+        "title" to note.title,
+        "body" to note.body,
+        "vault_path" to note.vaultPath,
+        "vault_commit" to note.vaultCommit,
+        "tags" to note.tags.toList().sorted(),
+    )
+
+private fun projectHit(hit: RecallHit): Map<String, Any?> =
+    mapOf(
+        "id" to hit.id,
+        "type" to hit.type,
+        "scope" to hit.scope,
+        "title" to hit.title,
+        "snippet" to hit.snippet,
+        "score" to hit.score,
+        "tags" to hit.tags.toList().sorted(),
+    )
+
+private fun projectRelation(rel: KbRelation): Map<String, Any?> =
+    mapOf(
+        "subject_id" to rel.subjectId,
+        "predicate" to rel.predicate,
+        "object_id" to rel.objectId,
+        "props" to rel.props,
+        "created_at" to rel.createdAt.toString(),
+    )
+
+private const val DEFAULT_RECALL_LIMIT = 10
+private const val DEFAULT_RECENT_LIMIT = 20
+private const val MAX_LIMIT = 100
+private const val DEFAULT_RELATION_DEPTH = 1
+
+private const val RECALL_TOOL_DESCRIPTION =
+    "Layered recall over kb_notes. `mode=fast` is single-leg Postgres FTS (~50 ms p50). " +
+        "`mode=hybrid` adds the pgvector ANN leg and fuses with Reciprocal Rank Fusion " +
+        "(~100-300 ms once Ollama is warm). `mode=deep` runs hybrid retrieval, optionally " +
+        "fuses LightRAG graph context when `knowledge.recall.graph.enabled=true`, then " +
+        "applies a listwise reranker. Server-side default is " +
+        "configurable (`knowledge.recall.default-mode`); when omitted, the server's choice applies."
+
+// Hard ceiling for the agent-facing depth; the repo enforces its own
+// private ceiling underneath, so this just keeps the tool's input
+// shape honest.
+private const val MAX_RELATION_DEPTH = 4

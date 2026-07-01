@@ -49,7 +49,6 @@ object Ulid {
         sb.append(chars)
     }
 
-    @Suppress("MagicNumber") // Byte-index ranges below match the documented hi/lo split.
     private fun encodeRandom(sb: StringBuilder) {
         val bytes = ByteArray(RANDOM_BYTES)
         random.nextBytes(bytes)
@@ -59,9 +58,9 @@ object Ulid {
         //   hi = bytes[0..3]  → 32 bits
         //   lo = bytes[4..9]  → 48 bits
         var hi = 0L
-        for (i in 0..3) hi = (hi shl BYTE_BITS) or (bytes[i].toLong() and BYTE_MASK)
+        for (i in HI_BYTE_RANGE) hi = (hi shl BYTE_BITS) or (bytes[i].toLong() and BYTE_MASK)
         var lo = 0L
-        for (i in 4..9) lo = (lo shl BYTE_BITS) or (bytes[i].toLong() and BYTE_MASK)
+        for (i in LO_BYTE_RANGE) lo = (lo shl BYTE_BITS) or (bytes[i].toLong() and BYTE_MASK)
         val chars = CharArray(RANDOM_CHARS)
         // Lower 10 chars come from `lo` (50 bits — 48 source bits +
         // 2 zero-padded; padding only widens the output, doesn't bias
@@ -86,3 +85,5 @@ private const val RANDOM_BYTES = 10
 private const val BYTE_BITS = 8
 private const val BYTE_MASK = 0xFFL
 private const val LO_CHARS = 10
+private val HI_BYTE_RANGE = 0..3
+private val LO_BYTE_RANGE = 4..9
