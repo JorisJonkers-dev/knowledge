@@ -86,7 +86,7 @@ class McpControllerIntegrationTest
                     .post("/mcp") {
                         contentType = MediaType.APPLICATION_JSON
                         header("Authorization", "Bearer test-token-ws")
-                        content = """{"jsonrpc":"2.0","id":42,"method":"ping"}"""
+                        content = """{"jsonrpc":"2.0","id":"test-request","method":"ping"}"""
                     }.andReturn()
 
             assertThat(result.response.status).isEqualTo(

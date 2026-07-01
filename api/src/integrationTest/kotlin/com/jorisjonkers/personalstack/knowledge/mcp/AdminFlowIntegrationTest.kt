@@ -9,6 +9,8 @@ import com.jorisjonkers.personalstack.knowledge.domain.Ulid
 import com.jorisjonkers.personalstack.knowledge.repo.NoteRepository
 import com.jorisjonkers.personalstack.knowledge.repo.TopicRepository
 import org.assertj.core.api.Assertions.assertThat
+import org.jooq.DSLContext
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -53,6 +55,21 @@ class AdminFlowIntegrationTest
                     .webAppContextSetup(context)
                     .addFilters<org.springframework.test.web.servlet.setup.DefaultMockMvcBuilder>(mcpBearerFilter)
                     .build()
+        }
+
+        /**
+         * Remove topics created during this test class's run.
+         * Flyway-seeded topics have created_by = 'seed' and must survive;
+         * test-created topics (via tool calls → 'mcp:admin', or via
+         * seedTopic → 'test-fixture') are cleaned up here so that
+         * test-ordering does not bleed state into sibling tests.
+         */
+        @AfterEach
+        fun cleanTopics(
+            @Autowired dsl: DSLContext,
+        ) {
+            dsl.execute("DELETE FROM kb_topic_aliases WHERE slug IN (SELECT slug FROM kb_topics WHERE created_by != 'seed')")
+            dsl.execute("DELETE FROM kb_topics WHERE created_by != 'seed'")
         }
 
         @Test
@@ -220,7 +237,7 @@ class AdminFlowIntegrationTest
         private fun seedTopic(
             slug: String,
             description: String,
-        ) = topicRepository.insert(slug = slug, description = description, aliases = emptySet(), createdBy = "seed")
+        ) = topicRepository.insert(slug = slug, description = description, aliases = emptySet(), createdBy = "test-fixture")
 
         private fun seedNote(
             scope: String = "personal",
