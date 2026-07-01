@@ -8,8 +8,10 @@ import com.jorisjonkers.personalstack.knowledge.repo.EmbeddingRepository
 import com.jorisjonkers.personalstack.knowledge.repo.NoteRepository
 import com.jorisjonkers.personalstack.knowledge.repo.RecallRepository
 import io.micrometer.observation.ObservationRegistry
+import org.jooq.exception.DataAccessException
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.stereotype.Component
 import org.springframework.stereotype.Service
 
 /**
@@ -31,12 +33,8 @@ import org.springframework.stereotype.Service
  */
 @Service
 class RecallService(
-    private val noteRepository: NoteRepository,
-    private val recallRepository: RecallRepository,
-    private val embeddingRepository: EmbeddingRepository,
-    private val queryEmbedder: QueryEmbedder,
-    private val graphRetriever: GraphRetriever,
-    private val reranker: Reranker,
+    private val stores: RecallStores,
+    private val enhancers: RecallEnhancers,
     private val observationRegistry: ObservationRegistry,
     @param:Value("\${knowledge.recall.default-mode:fast}")
     private val defaultModeWire: String,
@@ -82,12 +80,11 @@ class RecallService(
      * indexed-lookup, sub-millisecond at our scale. A failure here
      * never bubbles up; the recall response already serialised.
      */
-    @Suppress("TooGenericExceptionCaught")
     private fun bumpRecallStats(hits: List<RecallHit>) {
         if (hits.isEmpty()) return
         try {
-            noteRepository.bumpRecallStats(hits.map { it.id })
-        } catch (ex: RuntimeException) {
+            stores.noteRepository.bumpRecallStats(hits.map { it.id })
+        } catch (ex: DataAccessException) {
             log.warn("recall: usage-stats bump failed (count={})", hits.size, ex)
         }
     }
@@ -118,26 +115,26 @@ class RecallService(
             observation.lowCardinalityKeyValue("recall.rerank_used", "false")
             return candidates.take(limit)
         }
-        val reranked = reranker.rerank(query, candidates, keep = limit)
+        val reranked = enhancers.reranker.rerank(query, candidates, keep = limit)
         observation.lowCardinalityKeyValue("recall.rerank_used", "true")
         observation.highCardinalityKeyValue("recall.reranked_hits", reranked.size.toString())
         return reranked
     }
 
-    fun getNote(id: String): KbNote? = noteRepository.findById(id)
+    fun getNote(id: String): KbNote? = stores.noteRepository.findById(id)
 
     fun listRecent(
         scope: String?,
         type: KbNoteType?,
         limit: Int,
-    ): List<KbNote> = noteRepository.listRecent(scope, type, limit)
+    ): List<KbNote> = stores.noteRepository.listRecent(scope, type, limit)
 
-    fun findConflicts(id: String): List<KbRelation> = noteRepository.findConflicts(id)
+    fun findConflicts(id: String): List<KbRelation> = stores.noteRepository.findConflicts(id)
 
     fun walkRelations(
         id: String,
         depth: Int,
-    ): List<KbRelation> = noteRepository.walkRelations(id, depth)
+    ): List<KbRelation> = stores.noteRepository.walkRelations(id, depth)
 
     // -------- mode implementations --------
 
@@ -147,13 +144,12 @@ class RecallService(
         limit: Int,
         observation: io.micrometer.observation.Observation,
     ): List<RecallHit> {
-        val hits = recallRepository.recall(query, scope, limit)
+        val hits = stores.recallRepository.recall(query, scope, limit)
         observation.highCardinalityKeyValue("recall.fts_hits", hits.size.toString())
         observation.highCardinalityKeyValue("recall.vector_hits", "0")
         return hits
     }
 
-    @Suppress("TooGenericExceptionCaught")
     private fun recallHybrid(
         query: String,
         scope: String?,
@@ -162,19 +158,25 @@ class RecallService(
     ): List<RecallHit> {
         // The FTS leg is the floor — if it explodes there is nothing to
         // fall back to, so let the exception propagate.
-        val ftsHits = recallRepository.recall(query, scope, limit * VECTOR_OVERFETCH_FACTOR)
+        val ftsHits = stores.recallRepository.recall(query, scope, limit * VECTOR_OVERFETCH_FACTOR)
         observation.highCardinalityKeyValue("recall.fts_hits", ftsHits.size.toString())
 
         val vectorHits =
             try {
-                val embedding = queryEmbedder.embed(query)
-                embeddingRepository.recallVector(embedding, scope, limit * VECTOR_OVERFETCH_FACTOR)
-            } catch (ex: RuntimeException) {
+                val embedding = enhancers.queryEmbedder.embed(query)
+                stores.embeddingRepository.recallVector(embedding, scope, limit * VECTOR_OVERFETCH_FACTOR)
+            } catch (ex: QueryEmbeddingException) {
                 // Embedder or vector repo failed — log + count, don't 500
                 // the read path. The FTS leg alone still produces an answer.
-                // Narrow to RuntimeException so genuine programming errors
-                // (Errors, ThreadDeath, …) still propagate; RestClient and
-                // JDBC both wrap their failures as RuntimeException subtypes.
+                log.warn(
+                    "vector leg degraded; falling back to FTS-only (mode=hybrid, scope={}, query.len={})",
+                    scope,
+                    query.length,
+                    ex,
+                )
+                observation.lowCardinalityKeyValue("recall.degraded", "vector")
+                emptyList()
+            } catch (ex: DataAccessException) {
                 log.warn(
                     "vector leg degraded; falling back to FTS-only (mode=hybrid, scope={}, query.len={})",
                     scope,
@@ -196,7 +198,6 @@ class RecallService(
         return fused
     }
 
-    @Suppress("TooGenericExceptionCaught")
     private fun recallGraph(
         query: String,
         scope: String?,
@@ -204,8 +205,8 @@ class RecallService(
         observation: io.micrometer.observation.Observation,
     ): List<RecallHit> =
         try {
-            graphRetriever.retrieve(query, scope, limit)
-        } catch (ex: RuntimeException) {
+            enhancers.graphRetriever.retrieve(query, scope, limit)
+        } catch (ex: DataAccessException) {
             log.warn("graph leg degraded; falling back to hybrid-only deep recall", ex)
             observation.lowCardinalityKeyValue("recall.graph_degraded", "true")
             emptyList()
@@ -234,3 +235,17 @@ class RecallService(
         private const val RERANK_OVERFETCH_FACTOR = 2
     }
 }
+
+@Component
+class RecallStores(
+    val noteRepository: NoteRepository,
+    val recallRepository: RecallRepository,
+    val embeddingRepository: EmbeddingRepository,
+)
+
+@Component
+class RecallEnhancers(
+    val queryEmbedder: QueryEmbedder,
+    val graphRetriever: GraphRetriever,
+    val reranker: Reranker,
+)

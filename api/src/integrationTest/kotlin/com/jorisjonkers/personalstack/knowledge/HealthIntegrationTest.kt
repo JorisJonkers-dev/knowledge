@@ -18,33 +18,37 @@ import org.springframework.web.context.WebApplicationContext
  * HealthIntegrationTest but without security (knowledge-api 4a doesn't
  * wire in spring-security yet).
  */
-class HealthIntegrationTest : IntegrationTestBase() {
+class HealthIntegrationTest
     @Autowired
-    private lateinit var context: WebApplicationContext
+    constructor(
+        private val context: WebApplicationContext,
+    ) : IntegrationTestBase() {
+        private lateinit var mockMvc: MockMvc
 
-    private lateinit var mockMvc: MockMvc
+        private val objectMapper = jacksonObjectMapper()
 
-    private val objectMapper = jacksonObjectMapper()
+        @BeforeEach
+        fun setUp() {
+            mockMvc = MockMvcBuilders.webAppContextSetup(context).build()
+        }
 
-    @BeforeEach
-    fun setUp() {
-        mockMvc = MockMvcBuilders.webAppContextSetup(context).build()
+        @Test
+        fun compositeHealthReturnsOkWithStatusUPAndADbContributor() {
+            val result = mockMvc.get("/api/actuator/health").andReturn()
+
+            assertThat(result.response.status)
+                .describedAs("composite /api/actuator/health body=%s", result.response.contentAsString)
+                .isEqualTo(
+                    org.springframework.http.HttpStatus.OK
+                        .value(),
+                )
+
+            val body = objectMapper.readTree(result.response.contentAsString)
+            assertThat(body["status"].asText()).isEqualTo("UP")
+
+            val components = body["components"] ?: body["details"] ?: error("no components: $body")
+            assertThat(components.fieldNames().asSequence().toList())
+                .describedAs("expected core infra contributors to be present: $body")
+                .contains("db", "ping")
+        }
     }
-
-    @Test
-    fun `composite health returns 200 with status UP and a db contributor`() {
-        val result = mockMvc.get("/api/actuator/health").andReturn()
-
-        assertThat(result.response.status)
-            .describedAs("composite /api/actuator/health body=%s", result.response.contentAsString)
-            .isEqualTo(200)
-
-        val body = objectMapper.readTree(result.response.contentAsString)
-        assertThat(body["status"].asText()).isEqualTo("UP")
-
-        val components = body["components"] ?: body["details"] ?: error("no components: $body")
-        assertThat(components.fieldNames().asSequence().toList())
-            .describedAs("expected core infra contributors to be present: $body")
-            .contains("db", "ping")
-    }
-}

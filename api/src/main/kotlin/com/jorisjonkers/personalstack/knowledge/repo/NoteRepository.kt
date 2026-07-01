@@ -8,14 +8,15 @@ import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbNotes.KB_NOTES
 import com.jorisjonkers.personalstack.knowledge.jooq.tables.KbRelations.KB_RELATIONS
 import com.jorisjonkers.personalstack.knowledge.jooq.tables.records.KbNotesRecord
 import org.jooq.DSLContext
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Repository
+import tools.jackson.core.JacksonException
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.KotlinModule
 import java.time.Instant
 import java.time.ZoneOffset
 
 @Repository
-@Suppress("TooManyFunctions") // Repository methods intentionally mirror MCP/read-model operations.
 class NoteRepository(
     private val dsl: DSLContext,
 ) {
@@ -100,7 +101,7 @@ class NoteRepository(
         // Bulk-load tags for the returned ids in one query rather than
         // N+1.
         val ids = records.map { it.id ?: "" }.filter { it.isNotBlank() }
-        val tagMap = bulkTags(ids)
+        val tagMap = bulkTags(dsl, ids)
         return records.map { it.toDomain(tagMap[it.id].orEmpty()) }
     }
 
@@ -154,41 +155,11 @@ class NoteRepository(
         val collected = mutableListOf<KbRelation>()
         repeat(effectiveDepth) {
             if (frontier.isNotEmpty() && collected.size < MAX_ROWS) {
-                val edges = fetchEdgesTouching(frontier)
+                val edges = fetchEdgesTouching(dsl, frontier)
                 frontier = absorbEdges(edges, collected, visited)
             }
         }
         return collected
-    }
-
-    private fun fetchEdgesTouching(ids: Set<String>): List<KbRelation> =
-        dsl
-            .selectFrom(KB_RELATIONS)
-            .where(KB_RELATIONS.SUBJECT_ID.`in`(ids).or(KB_RELATIONS.OBJECT_ID.`in`(ids)))
-            .fetch()
-            .map { record ->
-                KbRelation(
-                    subjectId = record.subjectId ?: "",
-                    predicate = record.predicate ?: "",
-                    objectId = record.objectId ?: "",
-                    props = parseProps(record.props),
-                    createdAt = record.createdAt?.toInstant(ZoneOffset.UTC) ?: Instant.EPOCH,
-                )
-            }
-
-    private fun absorbEdges(
-        edges: List<KbRelation>,
-        collected: MutableList<KbRelation>,
-        visited: MutableSet<String>,
-    ): Set<String> {
-        val nextFrontier = mutableSetOf<String>()
-        for (edge in edges) {
-            if (collected.size >= MAX_ROWS) break
-            collected += edge
-            if (visited.add(edge.subjectId)) nextFrontier += edge.subjectId
-            if (visited.add(edge.objectId)) nextFrontier += edge.objectId
-        }
-        return nextFrontier
     }
 
     /**
@@ -210,35 +181,6 @@ class NoteRepository(
             .set(KB_RELATIONS.CREATED_AT, relation.createdAt.atOffset(ZoneOffset.UTC).toLocalDateTime())
             .execute()
     }
-
-    // -------- helpers --------
-
-    private fun bulkTags(ids: List<String>): Map<String, Set<String>> {
-        if (ids.isEmpty()) return emptyMap()
-        return dsl
-            .select(KB_NOTE_TAGS.NOTE_ID, KB_NOTE_TAGS.TAG)
-            .from(KB_NOTE_TAGS)
-            .where(KB_NOTE_TAGS.NOTE_ID.`in`(ids))
-            .fetch()
-            .groupBy({ it.value1() ?: "" }, { it.value2() ?: "" })
-            .mapValues { (_, tags) -> tags.filter { it.isNotBlank() }.toSet() }
-    }
-
-    private fun KbNotesRecord.toDomain(tags: Set<String>): KbNote =
-        KbNote(
-            id = id ?: error("kb_notes row missing id"),
-            type = KbNoteType.fromWire(type ?: error("kb_notes row missing type")),
-            scope = scope ?: "",
-            source = source ?: "",
-            capturedAt = capturedAt?.toInstant(ZoneOffset.UTC) ?: Instant.EPOCH,
-            sessionId = sessionId,
-            confidence = confidence?.toDouble() ?: 0.0,
-            title = title ?: "",
-            body = body ?: "",
-            vaultPath = vaultPath ?: "",
-            vaultCommit = vaultCommit,
-            tags = tags,
-        )
 
     /**
      * Bump `recall_count` + `last_recalled_at` on one or more rows.
@@ -282,25 +224,92 @@ class NoteRepository(
                 "WHERE id = ?",
             id,
         )
+}
 
-    @Suppress("UNCHECKED_CAST", "SwallowedException")
-    private fun parseProps(raw: String?): Map<String, Any?> {
-        if (raw.isNullOrBlank()) return emptyMap()
-        return try {
-            jsonMapper.readValue(raw, Map::class.java) as Map<String, Any?>
-        } catch (_: Exception) {
-            emptyMap()
+private val noteRepositoryLog = LoggerFactory.getLogger(NoteRepository::class.java)
+private val relationPropsJsonMapper: JsonMapper =
+    JsonMapper.builder().addModule(KotlinModule.Builder().build()).build()
+
+private val CONFLICT_PREDICATES = listOf("supersedes", "contradicts")
+
+// Bounds for `walkRelations`. The depth cap stops a runaway graph
+// walk; the row cap keeps the agent-facing response from blowing the
+// context budget on a hub note with thousands of incoming edges.
+private const val MAX_DEPTH = 4
+private const val MAX_ROWS = 200
+
+private fun fetchEdgesTouching(
+    dsl: DSLContext,
+    ids: Set<String>,
+): List<KbRelation> =
+    dsl
+        .selectFrom(KB_RELATIONS)
+        .where(KB_RELATIONS.SUBJECT_ID.`in`(ids).or(KB_RELATIONS.OBJECT_ID.`in`(ids)))
+        .fetch()
+        .map { record ->
+            KbRelation(
+                subjectId = record.subjectId ?: "",
+                predicate = record.predicate ?: "",
+                objectId = record.objectId ?: "",
+                props = parseProps(record.props),
+                createdAt = record.createdAt?.toInstant(ZoneOffset.UTC) ?: Instant.EPOCH,
+            )
         }
+
+private fun absorbEdges(
+    edges: List<KbRelation>,
+    collected: MutableList<KbRelation>,
+    visited: MutableSet<String>,
+): Set<String> {
+    val nextFrontier = mutableSetOf<String>()
+    for (edge in edges) {
+        if (collected.size >= MAX_ROWS) break
+        collected += edge
+        if (visited.add(edge.subjectId)) nextFrontier += edge.subjectId
+        if (visited.add(edge.objectId)) nextFrontier += edge.objectId
     }
+    return nextFrontier
+}
 
-    companion object {
-        private val CONFLICT_PREDICATES = listOf("supersedes", "contradicts")
+private fun bulkTags(
+    dsl: DSLContext,
+    ids: List<String>,
+): Map<String, Set<String>> {
+    if (ids.isEmpty()) return emptyMap()
+    return dsl
+        .select(KB_NOTE_TAGS.NOTE_ID, KB_NOTE_TAGS.TAG)
+        .from(KB_NOTE_TAGS)
+        .where(KB_NOTE_TAGS.NOTE_ID.`in`(ids))
+        .fetch()
+        .groupBy({ it.value1() ?: "" }, { it.value2() ?: "" })
+        .mapValues { (_, tags) -> tags.filter { it.isNotBlank() }.toSet() }
+}
 
-        // Bounds for `walkRelations`. The depth cap stops a runaway
-        // graph walk; the row cap keeps the agent-facing response
-        // from blowing the context budget on a hub note with
-        // thousands of incoming edges.
-        private const val MAX_DEPTH = 4
-        private const val MAX_ROWS = 200
+private fun KbNotesRecord.toDomain(tags: Set<String>): KbNote =
+    KbNote(
+        id = id ?: error("kb_notes row missing id"),
+        type = KbNoteType.fromWire(type ?: error("kb_notes row missing type")),
+        scope = scope ?: "",
+        source = source ?: "",
+        capturedAt = capturedAt?.toInstant(ZoneOffset.UTC) ?: Instant.EPOCH,
+        sessionId = sessionId,
+        confidence = confidence?.toDouble() ?: 0.0,
+        title = title ?: "",
+        body = body ?: "",
+        vaultPath = vaultPath ?: "",
+        vaultCommit = vaultCommit,
+        tags = tags,
+    )
+
+private fun parseProps(raw: String?): Map<String, Any?> {
+    if (raw.isNullOrBlank()) return emptyMap()
+    return try {
+        relationPropsJsonMapper
+            .readValue(raw, Map::class.java)
+            .entries
+            .associate { (key, value) -> key.toString() to value }
+    } catch (ex: JacksonException) {
+        noteRepositoryLog.warn("kb_relation props were not valid JSON", ex)
+        emptyMap()
     }
 }

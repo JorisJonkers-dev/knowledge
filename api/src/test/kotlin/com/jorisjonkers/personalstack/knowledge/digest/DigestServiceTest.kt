@@ -126,7 +126,7 @@ class DigestServiceTest {
     @Test
     fun `digest tolerates an Ollama call failure and returns empty`() {
         fixture()
-        every { ollama.chatJson(any(), any(), any()) } throws RuntimeException("connect timeout")
+        every { ollama.chatJson(any(), any(), any()) } throws IllegalStateException("connect timeout")
         val out = service.digest("transcript", 5, 0.0)
         assertThat(out).isEmpty()
     }

@@ -9,9 +9,11 @@ import com.jorisjonkers.personalstack.knowledge.domain.TagSummary
 import com.jorisjonkers.personalstack.knowledge.domain.TopicStats
 import com.jorisjonkers.personalstack.knowledge.domain.TopicSummary
 import com.jorisjonkers.personalstack.knowledge.recall.QueryEmbedder
+import com.jorisjonkers.personalstack.knowledge.recall.QueryEmbeddingException
 import com.jorisjonkers.personalstack.knowledge.repo.DiscoveryRepository
 import com.jorisjonkers.personalstack.knowledge.repo.EmbeddingRepository
 import com.jorisjonkers.personalstack.knowledge.repo.NoteRepository
+import org.jooq.exception.DataAccessException
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
@@ -68,7 +70,6 @@ class DiscoveryService(
      * no graceful FTS fallback for this tool because the FTS path
      * doesn't compute topic centroids.
      */
-    @Suppress("TooGenericExceptionCaught")
     fun suggestTopic(
         text: String,
         limit: Int,
@@ -77,9 +78,16 @@ class DiscoveryService(
         return try {
             val embedding = queryEmbedder.embed(text)
             embeddingRepository.suggestTopic(embedding, limit)
-        } catch (ex: RuntimeException) {
+        } catch (ex: QueryEmbeddingException) {
             log.warn(
                 "suggest_topic degraded: embedder failed (text.len={})",
+                text.length,
+                ex,
+            )
+            emptyList()
+        } catch (ex: DataAccessException) {
+            log.warn(
+                "suggest_topic degraded: repository failed (text.len={})",
                 text.length,
                 ex,
             )
@@ -94,7 +102,6 @@ class DiscoveryService(
      * note id (post-capture audit) — the id path uses the row's
      * persisted embedding to skip re-embedding.
      */
-    @Suppress("TooGenericExceptionCaught")
     fun findDuplicates(
         text: String,
         threshold: Double,
@@ -104,8 +111,11 @@ class DiscoveryService(
         return try {
             val embedding = queryEmbedder.embed(text)
             embeddingRepository.findDuplicates(embedding, threshold, limit)
-        } catch (ex: RuntimeException) {
+        } catch (ex: QueryEmbeddingException) {
             log.warn("find_duplicates degraded: embedder failed (text.len={})", text.length, ex)
+            emptyList()
+        } catch (ex: DataAccessException) {
+            log.warn("find_duplicates degraded: repository failed (text.len={})", text.length, ex)
             emptyList()
         }
     }

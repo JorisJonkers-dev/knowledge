@@ -6,7 +6,9 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.MediaType
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
+import org.springframework.web.client.RestClientException
 import org.springframework.web.client.body
+import tools.jackson.core.JacksonException
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.KotlinModule
 
@@ -32,8 +34,6 @@ class OllamaListwiseReranker(
     private val baseUrl: String,
     @param:Value("\${knowledge.ollama.reranker-model:qwen3-reranker:0.6b}")
     private val rerankerModel: String,
-    @param:Value("\${knowledge.recall.rerank-timeout-seconds:10}")
-    private val timeoutSeconds: Long,
 ) : Reranker {
     private val log = LoggerFactory.getLogger(OllamaListwiseReranker::class.java)
 
@@ -42,28 +42,36 @@ class OllamaListwiseReranker(
 
     private val client: RestClient = RestClient.builder().baseUrl(baseUrl).build()
 
-    @Suppress("TooGenericExceptionCaught", "ReturnCount")
     override fun rerank(
         query: String,
         candidates: List<RecallHit>,
         keep: Int,
-    ): List<RecallHit> {
-        if (candidates.isEmpty()) return emptyList()
-        if (candidates.size == 1) return candidates.take(keep)
+    ): List<RecallHit> =
+        when {
+            candidates.isEmpty() -> emptyList()
+            candidates.size == 1 -> candidates.take(keep)
+            else -> rerankOrNull(query, candidates)?.take(keep) ?: candidates.take(keep)
+        }
 
+    private fun rerankOrNull(
+        query: String,
+        candidates: List<RecallHit>,
+    ): List<RecallHit>? {
         val raw =
             try {
                 callOllama(query, candidates)
-            } catch (ex: RuntimeException) {
+            } catch (ex: RestClientException) {
                 log.warn("rerank: ollama call failed, falling back to pre-rerank order", ex)
-                return candidates.take(keep)
+                null
+            } catch (ex: IllegalStateException) {
+                log.warn("rerank: ollama response was incomplete, falling back to pre-rerank order", ex)
+                null
             }
-        val ordered = parseAndValidate(raw, candidates)
-        if (ordered == null) {
+        val ordered = raw?.let { parseAndValidate(it, candidates) }
+        if (raw != null && ordered == null) {
             log.warn("rerank: response failed validation, falling back to pre-rerank order")
-            return candidates.take(keep)
         }
-        return ordered.take(keep)
+        return ordered
     }
 
     private fun callOllama(
@@ -96,8 +104,18 @@ class OllamaListwiseReranker(
      * ids) of the input candidates' ids. Returns the ordered hit list
      * or null on any validation failure.
      */
-    @Suppress("ReturnCount")
     private fun parseAndValidate(
+        raw: String,
+        candidates: List<RecallHit>,
+    ): List<RecallHit>? =
+        try {
+            parseAndValidateJson(raw, candidates)
+        } catch (ex: JacksonException) {
+            log.warn("rerank: response was invalid JSON, falling back to pre-rerank order", ex)
+            null
+        }
+
+    private fun parseAndValidateJson(
         raw: String,
         candidates: List<RecallHit>,
     ): List<RecallHit>? {
@@ -109,17 +127,19 @@ class OllamaListwiseReranker(
                 ?.path("message")
                 ?.path("content")
                 ?.asString()
-                ?: return null
-        val tokenized =
-            content
-                .lines()
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .map { it.removeSuffix(",").removePrefix("-").trim() }
-        val byId = candidates.associateBy { it.id }
-        val ordered = tokenized.mapNotNull { byId[it] }
-        if (ordered.isEmpty()) return null
-        return ordered
+                .orEmpty()
+        return if (content.isBlank()) {
+            null
+        } else {
+            val tokenized =
+                content
+                    .lines()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .map { it.removeSuffix(",").removePrefix("-").trim() }
+            val byId = candidates.associateBy { it.id }
+            tokenized.mapNotNull { byId[it] }.takeIf { it.isNotEmpty() }
+        }
     }
 
     private fun userPrompt(

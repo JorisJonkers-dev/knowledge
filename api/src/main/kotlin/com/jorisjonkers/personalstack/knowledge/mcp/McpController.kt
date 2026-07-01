@@ -1,4 +1,3 @@
-@file:Suppress("DEPRECATION") // Jackson 3 deprecated JsonNode.asText() in favour of asString();
 // keeping the JsonNode shape across the codebase until a coordinated migration lands.
 
 package com.jorisjonkers.personalstack.knowledge.mcp
@@ -60,7 +59,7 @@ class McpController(
         val name =
             request.params
                 ?.get("name")
-                ?.asText()
+                ?.asString()
                 .orEmpty()
         val arguments = request.params?.get("arguments")
         return when {
@@ -73,41 +72,32 @@ class McpController(
         }
     }
 
-    private fun projectPromptResult(resolved: PromptResult): Map<String, Any?> =
-        mapOf(
-            "description" to resolved.description,
-            "messages" to
-                resolved.messages.map { msg ->
-                    mapOf(
-                        "role" to msg.role,
-                        "content" to mapOf("type" to "text", "text" to msg.text),
-                    )
-                },
-        )
-
-    // ReturnCount(4): each return signals a distinct failure mode of
-    // the JSON-RPC dispatch (blank name, unauthorized, unknown tool,
-    // success). Collapsing them via a sealed-result type adds more
-    // code than it removes and obscures the per-failure error code,
-    // so suppress the rule here rather than refactor for refactor's
-    // sake.
-    @Suppress("ReturnCount")
     private fun handleToolsCall(request: JsonRpcRequest): JsonRpcResponse {
         val name =
             request.params
                 ?.get("name")
-                ?.asText()
+                ?.asString()
                 .orEmpty()
-        if (name.isBlank()) return invalidParamsResponse(request.id, "tools/call: missing required string 'name'")
+        return if (name.isBlank()) {
+            invalidParamsResponse(request.id, "tools/call: missing required string 'name'")
+        } else {
+            dispatchToolCall(request, name)
+        }
+    }
+
+    private fun dispatchToolCall(
+        request: JsonRpcRequest,
+        name: String,
+    ): JsonRpcResponse {
         val arguments = request.params?.get("arguments")
-        val result =
-            try {
-                tools.call(name, arguments)
-            } catch (exc: McpAuthorizationError) {
-                return unauthorizedResponse(request.id, exc.message)
-            }
-                ?: return methodNotFoundResponse(request.id, "tools/call:$name")
-        return JsonRpcResponse(id = request.id, result = wrapToolResult(result))
+        return try {
+            tools
+                .call(name, arguments)
+                ?.let { JsonRpcResponse(id = request.id, result = wrapToolResult(it)) }
+                ?: methodNotFoundResponse(request.id, "tools/call:$name")
+        } catch (exc: McpAuthorizationError) {
+            unauthorizedResponse(request.id, exc.message)
+        }
     }
 
     private fun invalidParamsResponse(
@@ -200,3 +190,15 @@ class McpController(
         private val MAPPER: JsonMapper = JsonMapper.builder().build()
     }
 }
+
+private fun projectPromptResult(resolved: PromptResult): Map<String, Any?> =
+    mapOf(
+        "description" to resolved.description,
+        "messages" to
+            resolved.messages.map { msg ->
+                mapOf(
+                    "role" to msg.role,
+                    "content" to mapOf("type" to "text", "text" to msg.text),
+                )
+            },
+    )

@@ -3,9 +3,9 @@ package com.jorisjonkers.personalstack.knowledge
 import com.jorisjonkers.personalstack.knowledge.auth.McpBearerFilter
 import com.jorisjonkers.personalstack.knowledge.auth.McpBearerProperties
 import com.jorisjonkers.personalstack.knowledge.mcp.KnowledgeModeProperties
+import org.springframework.boot.SpringApplication
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.context.properties.EnableConfigurationProperties
-import org.springframework.boot.runApplication
 import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
 import org.springframework.scheduling.annotation.EnableScheduling
@@ -49,5 +49,5 @@ class KnowledgeApiApplication {
 }
 
 fun main(args: Array<String>) {
-    runApplication<KnowledgeApiApplication>(*args)
+    SpringApplication.run(arrayOf(KnowledgeApiApplication::class.java), args)
 }

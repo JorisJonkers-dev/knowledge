@@ -3,6 +3,7 @@ package com.jorisjonkers.personalstack.knowledge.discovery
 import com.jorisjonkers.personalstack.knowledge.domain.TagCandidateCluster
 import com.jorisjonkers.personalstack.knowledge.domain.TagCandidateMember
 import com.jorisjonkers.personalstack.knowledge.recall.QueryEmbedder
+import com.jorisjonkers.personalstack.knowledge.recall.QueryEmbeddingException
 import com.jorisjonkers.personalstack.knowledge.repo.DiscoveryRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
@@ -33,28 +34,39 @@ class TagClusterService(
 ) {
     private val log = LoggerFactory.getLogger(TagClusterService::class.java)
 
-    @Suppress("ReturnCount", "TooGenericExceptionCaught")
     fun listTagCandidates(
         minCount: Int,
         threshold: Double,
         maxTags: Int,
-    ): List<TagCandidateCluster> {
-        val rawTags =
-            discoveryRepository
-                .listTags(scope = null, limit = maxTags)
-                .filter { it.count >= minCount }
-        if (rawTags.size < 2) return emptyList()
+    ): List<TagCandidateCluster> =
+        candidateTags(minCount, maxTags)
+            .takeIf { it.size >= MIN_CLUSTER_SIZE }
+            ?.let { rawTags ->
+                val embeddings = embeddingsFor(rawTags.map { it.tag })
+                val countByTag = rawTags.associate { it.tag to it.count }
+                embeddings
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { cluster(it, countByTag, threshold) }
+                    .orEmpty()
+            }.orEmpty()
 
-        val embeddings: Map<String, FloatArray> =
-            try {
-                embedAll(rawTags.map { it.tag })
-            } catch (ex: RuntimeException) {
-                log.warn("list_tag_candidates degraded: embedder failed", ex)
-                return emptyList()
-            }
-        val countByTag = rawTags.associate { it.tag to it.count }
-        return cluster(embeddings, countByTag, threshold)
-    }
+    private fun candidateTags(
+        minCount: Int,
+        maxTags: Int,
+    ) = discoveryRepository
+        .listTags(scope = null, limit = maxTags)
+        .filter { it.count >= minCount }
+
+    private fun embeddingsFor(tags: List<String>): Map<String, FloatArray> =
+        try {
+            embedAll(tags)
+        } catch (ex: QueryEmbeddingException) {
+            log.warn("list_tag_candidates degraded: embedder failed", ex)
+            emptyMap()
+        } catch (ex: IllegalStateException) {
+            log.warn("list_tag_candidates degraded: embedder returned an invalid state", ex)
+            emptyMap()
+        }
 
     private fun embedAll(tags: List<String>): Map<String, FloatArray> {
         val out = LinkedHashMap<String, FloatArray>(tags.size)

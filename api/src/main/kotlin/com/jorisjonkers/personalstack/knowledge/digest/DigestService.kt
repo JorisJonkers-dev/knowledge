@@ -5,6 +5,9 @@ import com.jorisjonkers.personalstack.knowledge.repo.DiscoveryRepository
 import com.jorisjonkers.personalstack.knowledge.repo.TopicRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
+import org.springframework.web.client.RestClientException
+import tools.jackson.core.JacksonException
+import tools.jackson.databind.JsonNode
 
 /**
  * Reflexion-style session-digest service. Given a session
@@ -38,38 +41,61 @@ class DigestService(
 ) {
     private val log = LoggerFactory.getLogger(DigestService::class.java)
 
-    @Suppress("ReturnCount", "TooGenericExceptionCaught")
     fun digest(
         transcript: String,
         maxCandidates: Int = DEFAULT_MAX_CANDIDATES,
         minConfidence: Double = DEFAULT_MIN_CONFIDENCE,
+    ): List<DigestCandidate> =
+        if (transcript.isBlank()) {
+            emptyList()
+        } else {
+            digestTranscript(transcript, maxCandidates, minConfidence)
+        }
+
+    private fun digestTranscript(
+        transcript: String,
+        maxCandidates: Int,
+        minConfidence: Double,
     ): List<DigestCandidate> {
-        if (transcript.isBlank()) return emptyList()
         val cappedMax = maxCandidates.coerceIn(1, ABSOLUTE_MAX_CANDIDATES)
         val topicSlugs = topicRepository.listActive().map { it.slug }
         val knownTags = discoveryRepository.listTags(scope = null, limit = TAG_VOCAB_FOR_PROMPT).map { it.tag }
-        val rawJson =
-            try {
-                ollama.chatJson(
-                    systemPrompt = systemPrompt(topicSlugs, knownTags, cappedMax),
-                    userPrompt = userPrompt(transcript),
-                    responseSchema = responseSchema(cappedMax),
-                )
-            } catch (exc: RuntimeException) {
-                log.warn("digest.ollama_failed", exc)
-                return emptyList()
-            }
-        val parsed =
-            rawJson.path("candidates").takeIf { it.isArray }
-                ?: rawJson.takeIf { it.isArray }
-                ?: return emptyList()
+        val parsed = requestDigest(transcript, topicSlugs, knownTags, cappedMax)?.candidateArray()
         return parsed
-            .mapNotNull(::parseCandidate)
-            .filter { it.confidence >= minConfidence }
-            .take(cappedMax)
+            ?.mapNotNull(::parseCandidate)
+            ?.filter { it.confidence >= minConfidence }
+            ?.take(cappedMax)
+            .orEmpty()
     }
 
-    private fun parseCandidate(node: tools.jackson.databind.JsonNode): DigestCandidate? {
+    private fun requestDigest(
+        transcript: String,
+        topicSlugs: List<String>,
+        knownTags: List<String>,
+        cappedMax: Int,
+    ): JsonNode? =
+        try {
+            ollama.chatJson(
+                systemPrompt = systemPrompt(topicSlugs, knownTags, cappedMax),
+                userPrompt = userPrompt(transcript),
+                responseSchema = responseSchema(cappedMax),
+            )
+        } catch (exc: RestClientException) {
+            log.warn("digest.ollama_failed", exc)
+            null
+        } catch (exc: JacksonException) {
+            log.warn("digest.ollama_invalid_json", exc)
+            null
+        } catch (exc: IllegalStateException) {
+            log.warn("digest.ollama_incomplete_response", exc)
+            null
+        }
+
+    private fun JsonNode.candidateArray(): JsonNode? =
+        path("candidates").takeIf { it.isArray }
+            ?: takeIf { it.isArray }
+
+    private fun parseCandidate(node: JsonNode): DigestCandidate? {
         val kind =
             node
                 .path("kind")
@@ -94,7 +120,7 @@ class DigestService(
     }
 
     private fun parseStringArray(
-        node: tools.jackson.databind.JsonNode,
+        node: JsonNode,
         field: String,
         cap: Int,
     ): List<String> =

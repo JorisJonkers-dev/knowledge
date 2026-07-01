@@ -49,8 +49,7 @@ class AdminAuthorization(
             ?: denied("admin tools require a resolved bearer token")
     }
 
-    @Suppress("NOTHING_TO_INLINE")
-    private inline fun denied(message: String): Nothing = throw McpAuthorizationError(message)
+    private fun denied(message: String): Nothing = throw McpAuthorizationError(message)
 }
 
 /**

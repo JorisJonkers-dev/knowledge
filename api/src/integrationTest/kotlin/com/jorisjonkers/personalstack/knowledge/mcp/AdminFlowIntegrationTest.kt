@@ -9,6 +9,7 @@ import com.jorisjonkers.personalstack.knowledge.domain.Ulid
 import com.jorisjonkers.personalstack.knowledge.repo.NoteRepository
 import com.jorisjonkers.personalstack.knowledge.repo.TopicRepository
 import org.assertj.core.api.Assertions.assertThat
+import org.jooq.DSLContext
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -34,251 +35,271 @@ import java.time.Instant
         "knowledge.mcp.admin-tokens[0]=admin",
     ],
 )
-class AdminFlowIntegrationTest : IntegrationTestBase() {
+class AdminFlowIntegrationTest
     @Autowired
-    private lateinit var context: WebApplicationContext
+    constructor(
+        private val context: WebApplicationContext,
+        private val mcpBearerFilter: McpBearerFilter,
+        private val noteRepository: NoteRepository,
+        private val topicRepository: TopicRepository,
+    ) : IntegrationTestBase() {
+        private lateinit var mockMvc: MockMvc
 
-    @Autowired
-    private lateinit var mcpBearerFilter: McpBearerFilter
+        private val objectMapper = jacksonObjectMapper()
 
-    @Autowired
-    private lateinit var noteRepository: NoteRepository
-
-    @Autowired
-    private lateinit var topicRepository: TopicRepository
-
-    private lateinit var mockMvc: MockMvc
-
-    private val objectMapper = jacksonObjectMapper()
-
-    @BeforeEach
-    fun setUp() {
-        mockMvc =
-            MockMvcBuilders
-                .webAppContextSetup(context)
-                .addFilters<org.springframework.test.web.servlet.setup.DefaultMockMvcBuilder>(mcpBearerFilter)
-                .build()
-    }
-
-    @Test
-    fun `add_topic refuses a non-admin bearer with -32001`() {
-        val response =
-            callRaw(
-                bearer = "user-token",
-                name = "knowledge.add_topic",
-                args = mapOf("slug" to "rust", "description" to "Rust ecosystem"),
+        /**
+         * Clean topics created by earlier tests before each test so ordering does not bleed
+         * state into siblings. Flyway-seeded topics (created_by = 'seed') survive; test-created
+         * topics (tool calls → 'mcp:admin', seedTopic → 'test-fixture') are removed.
+         */
+        @BeforeEach
+        fun setUp(
+            @Autowired dsl: DSLContext,
+        ) {
+            dsl.execute(
+                "DELETE FROM kb_topic_aliases WHERE slug IN " +
+                    "(SELECT slug FROM kb_topics WHERE created_by != 'seed')",
             )
-        val error = objectMapper.readTree(response)["error"]
-        assertThat(error["code"].asInt()).isEqualTo(-32001)
-        assertThat(topicRepository.findBySlug("rust")).isNull()
-    }
+            dsl.execute("DELETE FROM kb_topics WHERE created_by != 'seed'")
+            mockMvc =
+                MockMvcBuilders
+                    .webAppContextSetup(context)
+                    .addFilters<org.springframework.test.web.servlet.setup.DefaultMockMvcBuilder>(mcpBearerFilter)
+                    .build()
+        }
 
-    @Test
-    fun `add_topic with an admin bearer inserts the slug and surfaces it via list_topics`() {
-        val response =
-            callRaw(
-                bearer = "admin-token",
-                name = "knowledge.add_topic",
-                args =
-                    mapOf(
-                        "slug" to "rust",
-                        "description" to "Rust ecosystem",
-                        "aliases" to listOf("rs", "Rust"),
-                    ),
-            )
-        val structured = objectMapper.readTree(response)["result"]["structuredContent"]
-        assertThat(structured["topic"]["slug"].asText()).isEqualTo("rust")
-        assertThat(structured["topic"]["is_active"].asBoolean()).isTrue
-        val aliases = structured["topic"]["aliases"].map { it.asText() }
-        // The slug doubles as its own alias by convention; passed
-        // aliases are lowercased on insert.
-        assertThat(aliases).contains("rust", "rs")
-    }
+        @Test
+        fun addTopicRefusesANonAdminBearer() {
+            val response =
+                callRaw(
+                    bearer = "user-token",
+                    name = "knowledge.add_topic",
+                    args = mapOf("slug" to "rust", "description" to "Rust ecosystem"),
+                )
+            val error = objectMapper.readTree(response)["error"]
+            assertThat(error["code"].asInt()).isEqualTo(UNAUTHORIZED_CODE)
+            assertThat(topicRepository.findBySlug("rust")).isNull()
+        }
 
-    @Test
-    fun `update_topic flips is_active and replaces aliases wholesale`() {
-        seedTopic(slug = "ephemeral", description = "to be retired")
-
-        val response =
-            callRaw(
-                bearer = "admin-token",
-                name = "knowledge.update_topic",
-                args =
-                    mapOf(
-                        "slug" to "ephemeral",
-                        "description" to "retired",
-                        "aliases" to listOf("old-name"),
-                        "is_active" to false,
-                    ),
-            )
-
-        val topic = objectMapper.readTree(response)["result"]["structuredContent"]["topic"]
-        assertThat(topic["is_active"].asBoolean()).isFalse
-        assertThat(topic["description"].asText()).isEqualTo("retired")
-    }
-
-    @Test
-    fun `merge_topics moves every scoped note over and soft-deactivates the source`() {
-        seedTopic(slug = "old-slug", description = "legacy")
-        seedTopic(slug = "new-slug", description = "consolidated home")
-        val a = seedNote(scope = "topic:old-slug")
-        val b = seedNote(scope = "topic:old-slug")
-        val c = seedNote(scope = "topic:new-slug")
-
-        val response =
-            callRaw(
-                bearer = "admin-token",
-                name = "knowledge.merge_topics",
-                args = mapOf("from_slug" to "old-slug", "into_slug" to "new-slug"),
-            )
-
-        val structured = objectMapper.readTree(response)["result"]["structuredContent"]
-        assertThat(structured["notes_moved"].asInt()).isEqualTo(2)
-        assertThat(structured["actor"].asText()).isEqualTo("mcp:admin")
-
-        // Source slug is now soft-deactivated; both notes carry the
-        // new scope; the destination's existing note is unaffected.
-        assertThat(topicRepository.findBySlug("old-slug")?.isActive).isFalse
-        assertThat(noteRepository.findById(a.id)?.scope).isEqualTo("topic:new-slug")
-        assertThat(noteRepository.findById(b.id)?.scope).isEqualTo("topic:new-slug")
-        assertThat(noteRepository.findById(c.id)?.scope).isEqualTo("topic:new-slug")
-    }
-
-    @Test
-    fun `rename_tag updates every kb_note_tags row touching the source tag`() {
-        seedNote(tags = setOf("kt", "spring"))
-        seedNote(tags = setOf("kt"))
-        seedNote(tags = setOf("vue"))
-
-        val response =
-            callRaw(
-                bearer = "admin-token",
-                name = "knowledge.rename_tag",
-                args = mapOf("from" to "kt", "to" to "kotlin"),
-            )
-
-        val structured = objectMapper.readTree(response)["result"]["structuredContent"]
-        assertThat(structured["rows_touched"].asInt()).isEqualTo(2)
-        assertThat(structured["from"].asText()).isEqualTo("kt")
-        assertThat(structured["to"].asText()).isEqualTo("kotlin")
-
-        val auditRows = auditRows("rename_tag")
-        assertThat(auditRows.size()).isEqualTo(1)
-        val audit = auditRows[0]
-        assertThat(audit["id"].asText()).isEqualTo(structured["audit_id"].asText())
-        assertThat(audit["actor"].asText()).isEqualTo("mcp:admin")
-        assertThat(audit["target_kind"].asText()).isEqualTo("tag")
-        assertThat(audit["before_json"].asText()).isEqualTo("""{"tag":"kt"}""")
-        assertThat(audit["after_json"].asText()).isEqualTo("""{"tag":"kotlin","rows_touched":2}""")
-    }
-
-    @Test
-    fun `merge_tags folds duplicate and source rows into the canonical tag idempotently`() {
-        val duplicate = seedNote(tags = setOf("kt", "kotlin"))
-        val renamed = seedNote(tags = setOf("kt", "spring"))
-        val renamedSecondSource = seedNote(tags = setOf("kts", "gradle"))
-        val unrelated = seedNote(tags = setOf("vue"))
-
-        val response =
-            callRaw(
-                bearer = "admin-token",
-                name = "knowledge.merge_tags",
-                args = mapOf("from" to listOf("kt", "kts"), "into" to "kotlin"),
-            )
-
-        val structured = objectMapper.readTree(response)["result"]["structuredContent"]
-        assertThat(structured["from"].map { it.asText() }).containsExactly("kt", "kts")
-        assertThat(structured["into"].asText()).isEqualTo("kotlin")
-        assertThat(structured["rows_renamed"].asInt()).isEqualTo(2)
-        assertThat(structured["rows_dropped_as_dupes"].asInt()).isEqualTo(1)
-        assertThat(structured["actor"].asText()).isEqualTo("mcp:admin")
-
-        assertThat(noteRepository.findById(duplicate.id)?.tags).containsExactlyInAnyOrder("kotlin")
-        assertThat(noteRepository.findById(renamed.id)?.tags).containsExactlyInAnyOrder("kotlin", "spring")
-        assertThat(noteRepository.findById(renamedSecondSource.id)?.tags)
-            .containsExactlyInAnyOrder("kotlin", "gradle")
-        assertThat(noteRepository.findById(unrelated.id)?.tags).containsExactlyInAnyOrder("vue")
-
-        val secondResponse =
-            callRaw(
-                bearer = "admin-token",
-                name = "knowledge.merge_tags",
-                args = mapOf("from" to listOf("kt", "kts"), "into" to "kotlin"),
-            )
-
-        val secondStructured = objectMapper.readTree(secondResponse)["result"]["structuredContent"]
-        assertThat(secondStructured["rows_renamed"].asInt()).isEqualTo(0)
-        assertThat(secondStructured["rows_dropped_as_dupes"].asInt()).isEqualTo(0)
-        assertThat(secondStructured.has("audit_id")).isFalse()
-
-        val auditRows = auditRows("merge_tags")
-        assertThat(auditRows.size()).isEqualTo(1)
-        val audit = auditRows[0]
-        assertThat(audit["id"].asText()).isEqualTo(structured["audit_id"].asText())
-        assertThat(audit["actor"].asText()).isEqualTo("mcp:admin")
-        assertThat(audit["target_kind"].asText()).isEqualTo("tag")
-        assertThat(audit["before_json"].asText()).isEqualTo("""{"from":["kt","kts"]}""")
-        assertThat(audit["after_json"].asText())
-            .isEqualTo("""{"into":"kotlin","rows_renamed":2,"rows_dropped_as_dupes":1}""")
-    }
-
-    private fun seedTopic(
-        slug: String,
-        description: String,
-    ) = topicRepository.insert(slug = slug, description = description, aliases = emptySet(), createdBy = "seed")
-
-    private fun seedNote(
-        scope: String = "personal",
-        tags: Set<String> = emptySet(),
-    ): KbNote {
-        val note =
-            KbNote(
-                id = Ulid.generate(),
-                type = KbNoteType.LESSON,
-                scope = scope,
-                source = "test",
-                capturedAt = Instant.now(),
-                sessionId = null,
-                confidence = 0.4,
-                title = "title",
-                body = "body",
-                vaultPath = "$scope/draft.md",
-                vaultCommit = null,
-                tags = tags,
-            )
-        return noteRepository.create(note)
-    }
-
-    private fun callRaw(
-        bearer: String,
-        name: String,
-        args: Map<String, Any?>,
-    ): String {
-        val body =
-            mapOf(
-                "jsonrpc" to "2.0",
-                "id" to 1,
-                "method" to "tools/call",
-                "params" to mapOf("name" to name, "arguments" to args),
-            )
-        val result =
-            mockMvc
-                .post("/mcp") {
-                    contentType = MediaType.APPLICATION_JSON
-                    header("Authorization", "Bearer $bearer")
-                    content = objectMapper.writeValueAsBytes(body)
-                }.andReturn()
-        assertThat(result.response.status).isEqualTo(200)
-        return result.response.contentAsString
-    }
-
-    private fun auditRows(action: String) =
-        objectMapper
-            .readTree(
+        @Test
+        fun addTopicWithAnAdminBearerInsertsTheSlugAndSurfacesItViaListTopics() {
+            val response =
                 callRaw(
                     bearer = "admin-token",
-                    name = "knowledge.list_audit",
-                    args = mapOf("action" to action, "limit" to 10),
-                ),
-            )["result"]["structuredContent"]["rows"]
-}
+                    name = "knowledge.add_topic",
+                    args =
+                        mapOf(
+                            "slug" to "rust",
+                            "description" to "Rust ecosystem",
+                            "aliases" to listOf("rs", "Rust"),
+                        ),
+                )
+            val structured = objectMapper.readTree(response)["result"]["structuredContent"]
+            assertThat(structured["topic"]["slug"].asText()).isEqualTo("rust")
+            assertThat(structured["topic"]["is_active"].asBoolean()).isTrue
+            val aliases = structured["topic"]["aliases"].map { it.asText() }
+            // The slug doubles as its own alias by convention; passed
+            // aliases are lowercased on insert.
+            assertThat(aliases).contains("rust", "rs")
+        }
+
+        @Test
+        fun updateTopicFlipsIsActiveAndReplacesAliasesWholesale() {
+            seedTopic(slug = "ephemeral", description = "to be retired")
+
+            val response =
+                callRaw(
+                    bearer = "admin-token",
+                    name = "knowledge.update_topic",
+                    args =
+                        mapOf(
+                            "slug" to "ephemeral",
+                            "description" to "retired",
+                            "aliases" to listOf("old-name"),
+                            "is_active" to false,
+                        ),
+                )
+
+            val topic = objectMapper.readTree(response)["result"]["structuredContent"]["topic"]
+            assertThat(topic["is_active"].asBoolean()).isFalse
+            assertThat(topic["description"].asText()).isEqualTo("retired")
+        }
+
+        @Test
+        fun mergeTopicsMovesEveryScopedNoteOverAndSoftDeactivatesTheSource() {
+            seedTopic(slug = "old-slug", description = "legacy")
+            seedTopic(slug = "new-slug", description = "consolidated home")
+            val a = seedNote(scope = "topic:old-slug")
+            val b = seedNote(scope = "topic:old-slug")
+            val c = seedNote(scope = "topic:new-slug")
+
+            val response =
+                callRaw(
+                    bearer = "admin-token",
+                    name = "knowledge.merge_topics",
+                    args = mapOf("from_slug" to "old-slug", "into_slug" to "new-slug"),
+                )
+
+            val structured = objectMapper.readTree(response)["result"]["structuredContent"]
+            assertThat(structured["notes_moved"].asInt()).isEqualTo(2)
+            assertThat(structured["actor"].asText()).isEqualTo("mcp:admin")
+
+            // Source slug is now soft-deactivated; both notes carry the
+            // new scope; the destination's existing note is unaffected.
+            assertThat(topicRepository.findBySlug("old-slug")?.isActive).isFalse
+            assertThat(noteRepository.findById(a.id)?.scope).isEqualTo("topic:new-slug")
+            assertThat(noteRepository.findById(b.id)?.scope).isEqualTo("topic:new-slug")
+            assertThat(noteRepository.findById(c.id)?.scope).isEqualTo("topic:new-slug")
+        }
+
+        @Test
+        fun renameTagUpdatesEveryKbNoteTagsRowTouchingTheSourceTag() {
+            seedNote(tags = setOf("kt", "spring"))
+            seedNote(tags = setOf("kt"))
+            seedNote(tags = setOf("vue"))
+
+            val response =
+                callRaw(
+                    bearer = "admin-token",
+                    name = "knowledge.rename_tag",
+                    args = mapOf("from" to "kt", "to" to "kotlin"),
+                )
+
+            val structured = objectMapper.readTree(response)["result"]["structuredContent"]
+            assertThat(structured["rows_touched"].asInt()).isEqualTo(2)
+            assertThat(structured["from"].asText()).isEqualTo("kt")
+            assertThat(structured["to"].asText()).isEqualTo("kotlin")
+
+            val auditRows = auditRows("rename_tag")
+            assertThat(auditRows.size()).isEqualTo(1)
+            val audit = auditRows[0]
+            assertThat(audit["id"].asText()).isEqualTo(structured["audit_id"].asText())
+            assertThat(audit["actor"].asText()).isEqualTo("mcp:admin")
+            assertThat(audit["target_kind"].asText()).isEqualTo("tag")
+            assertThat(audit["before_json"].asText()).isEqualTo("""{"tag":"kt"}""")
+            assertThat(audit["after_json"].asText()).isEqualTo("""{"tag":"kotlin","rows_touched":2}""")
+        }
+
+        @Test
+        fun mergeTagsFoldsDuplicateAndSourceRowsIntoTheCanonicalTagIdempotently() {
+            val duplicate = seedNote(tags = setOf("kt", "kotlin"))
+            val renamed = seedNote(tags = setOf("kt", "spring"))
+            val renamedSecondSource = seedNote(tags = setOf("kts", "gradle"))
+            val unrelated = seedNote(tags = setOf("vue"))
+
+            val response =
+                callRaw(
+                    bearer = "admin-token",
+                    name = "knowledge.merge_tags",
+                    args = mapOf("from" to listOf("kt", "kts"), "into" to "kotlin"),
+                )
+
+            val structured = objectMapper.readTree(response)["result"]["structuredContent"]
+            assertThat(structured["from"].map { it.asText() }).containsExactly("kt", "kts")
+            assertThat(structured["into"].asText()).isEqualTo("kotlin")
+            assertThat(structured["rows_renamed"].asInt()).isEqualTo(2)
+            assertThat(structured["rows_dropped_as_dupes"].asInt()).isEqualTo(1)
+            assertThat(structured["actor"].asText()).isEqualTo("mcp:admin")
+
+            assertThat(noteRepository.findById(duplicate.id)?.tags).containsExactlyInAnyOrder("kotlin")
+            assertThat(noteRepository.findById(renamed.id)?.tags).containsExactlyInAnyOrder("kotlin", "spring")
+            assertThat(noteRepository.findById(renamedSecondSource.id)?.tags)
+                .containsExactlyInAnyOrder("kotlin", "gradle")
+            assertThat(noteRepository.findById(unrelated.id)?.tags).containsExactlyInAnyOrder("vue")
+
+            val secondResponse =
+                callRaw(
+                    bearer = "admin-token",
+                    name = "knowledge.merge_tags",
+                    args = mapOf("from" to listOf("kt", "kts"), "into" to "kotlin"),
+                )
+
+            val secondStructured = objectMapper.readTree(secondResponse)["result"]["structuredContent"]
+            assertThat(secondStructured["rows_renamed"].asInt()).isEqualTo(0)
+            assertThat(secondStructured["rows_dropped_as_dupes"].asInt()).isEqualTo(0)
+            assertThat(secondStructured.has("audit_id")).isFalse()
+
+            val auditRows = auditRows("merge_tags")
+            assertThat(auditRows.size()).isEqualTo(1)
+            val audit = auditRows[0]
+            assertThat(audit["id"].asText()).isEqualTo(structured["audit_id"].asText())
+            assertThat(audit["actor"].asText()).isEqualTo("mcp:admin")
+            assertThat(audit["target_kind"].asText()).isEqualTo("tag")
+            assertThat(audit["before_json"].asText()).isEqualTo("""{"from":["kt","kts"]}""")
+            assertThat(audit["after_json"].asText())
+                .isEqualTo("""{"into":"kotlin","rows_renamed":2,"rows_dropped_as_dupes":1}""")
+        }
+
+        private fun seedTopic(
+            slug: String,
+            description: String,
+        ) = topicRepository.insert(
+            slug = slug,
+            description = description,
+            aliases = emptySet(),
+            createdBy = "test-fixture",
+        )
+
+        private fun seedNote(
+            scope: String = "personal",
+            tags: Set<String> = emptySet(),
+        ): KbNote {
+            val note =
+                KbNote(
+                    id = Ulid.generate(),
+                    type = KbNoteType.LESSON,
+                    scope = scope,
+                    source = "test",
+                    capturedAt = Instant.now(),
+                    sessionId = null,
+                    confidence = 0.4,
+                    title = "title",
+                    body = "body",
+                    vaultPath = "$scope/draft.md",
+                    vaultCommit = null,
+                    tags = tags,
+                )
+            return noteRepository.create(note)
+        }
+
+        private fun callRaw(
+            bearer: String,
+            name: String,
+            args: Map<String, Any?>,
+        ): String {
+            val body =
+                mapOf(
+                    "jsonrpc" to "2.0",
+                    "id" to "test-request",
+                    "method" to "tools/call",
+                    "params" to mapOf("name" to name, "arguments" to args),
+                )
+            val result =
+                mockMvc
+                    .post("/mcp") {
+                        contentType = MediaType.APPLICATION_JSON
+                        header("Authorization", "Bearer $bearer")
+                        content = objectMapper.writeValueAsBytes(body)
+                    }.andReturn()
+            assertThat(result.response.status).isEqualTo(
+                org.springframework.http.HttpStatus.OK
+                    .value(),
+            )
+            return result.response.contentAsString
+        }
+
+        private fun auditRows(action: String) =
+            objectMapper
+                .readTree(
+                    callRaw(
+                        bearer = "admin-token",
+                        name = "knowledge.list_audit",
+                        args = mapOf("action" to action, "limit" to AUDIT_LIMIT),
+                    ),
+                )["result"]["structuredContent"]["rows"]
+
+        private companion object {
+            private const val UNAUTHORIZED_CODE = -32001
+            private const val AUDIT_LIMIT = 10
+        }
+    }

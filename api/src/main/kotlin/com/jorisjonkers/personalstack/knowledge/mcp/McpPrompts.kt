@@ -177,9 +177,8 @@ internal object TopicsAuditPrompt : PromptDefinition {
             "thin, slugs that look like duplicates, and notes that haven't been classified yet."
     override val arguments: List<PromptArgument> = emptyList()
 
-    @Suppress("UNUSED_PARAMETER")
     override fun build(arguments: JsonNode?): PromptResult {
-        val text =
+        val baseText =
             """
             Run a knowledge-base vocabulary audit:
 
@@ -189,6 +188,12 @@ internal object TopicsAuditPrompt : PromptDefinition {
 
             Report findings as three short sections (thin topics, duplicate-looking tags, pending inbox). Propose specific `knowledge.merge_topics` / `knowledge.rename_tag` calls for the candidates rather than just naming them. Don't actually run the mutations.
             """.trimIndent()
+        val text =
+            if (arguments != null && !arguments.isNull && arguments.size() > 0) {
+                "$baseText\n\nIgnore supplied arguments; this prompt does not define parameters."
+            } else {
+                baseText
+            }
         return PromptResult(
             description = "Audit pass over topics + tags + pending inbox.",
             messages = listOf(PromptMessage(role = "user", text = text)),

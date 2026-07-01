@@ -7,12 +7,15 @@ import org.springframework.http.MediaType
 import org.springframework.http.client.JdkClientHttpRequestFactory
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
+import org.springframework.web.client.RestClientException
 import org.springframework.web.client.body
+import tools.jackson.core.JacksonException
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.KotlinModule
 import java.net.http.HttpClient
 import java.security.MessageDigest
 import java.time.Duration
+import java.util.Locale
 
 /**
  * LightRAG graph/context leg for `knowledge.recall(mode=deep)`.
@@ -64,15 +67,23 @@ class LightRagGraphRetriever(
 
     private fun shouldQuery(query: String): Boolean = enabled && lightragUrl.isNotBlank() && query.isNotBlank()
 
-    @Suppress("TooGenericExceptionCaught")
     private fun queryLightRagSafely(
         query: String,
         limit: Int,
     ): String =
         try {
             queryLightRag(query, limit)
-        } catch (ex: RuntimeException) {
+        } catch (ex: RestClientException) {
             log.warn("lightrag graph recall failed; deep recall will use hybrid candidates only", ex)
+            ""
+        } catch (ex: JacksonException) {
+            log.warn("lightrag graph recall returned invalid JSON; deep recall will use hybrid candidates only", ex)
+            ""
+        } catch (ex: IllegalStateException) {
+            log.warn(
+                "lightrag graph recall returned an incomplete response; deep recall will use hybrid candidates only",
+                ex,
+            )
             ""
         }
 
@@ -106,7 +117,7 @@ class LightRagGraphRetriever(
         MessageDigest
             .getInstance("SHA-256")
             .digest(value.toByteArray())
-            .joinToString("") { "%02x".format(it.toInt() and BYTE_MASK) }
+            .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and BYTE_MASK) }
 
     private companion object {
         private const val ID_HASH_CHARS = 16

@@ -21,7 +21,7 @@
     'name': 'JVM'
     'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/jvm-ci.yml@v0.8.1'
     'with':
-      'lint-gradle-args': ':api:detekt :api:ktlintCheck'
+      'lint-gradle-args': ':api:detektMain :api:detektTest :api:detektIntegrationTest :api:ktlintCheck'
       'test-gradle-args': ':api:test :api:integrationTest :api:jacocoTestCoverageVerification :api:exportOpenApiSpec'
     'secrets':
       'packages-token': '${{ secrets.GITHUB_TOKEN }}'

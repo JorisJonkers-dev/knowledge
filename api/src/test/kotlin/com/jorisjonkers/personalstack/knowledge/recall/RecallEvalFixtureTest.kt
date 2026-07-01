@@ -94,12 +94,8 @@ class RecallEvalFixtureTest {
 
         val service =
             RecallService(
-                noteRepository = noteRepository,
-                recallRepository = recallRepository,
-                embeddingRepository = embeddingRepository,
-                queryEmbedder = queryEmbedder,
-                graphRetriever = graphRetriever,
-                reranker = reranker,
+                stores = RecallStores(noteRepository, recallRepository, embeddingRepository),
+                enhancers = RecallEnhancers(queryEmbedder, graphRetriever, reranker),
                 observationRegistry = ObservationRegistry.NOOP,
                 defaultModeWire = evalCase.mode,
                 rrfK = 60,

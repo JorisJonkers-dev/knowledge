@@ -328,7 +328,6 @@
         "parameters" : [ {
           "in" : "query",
           "name" : "limit",
-          "required" : false,
           "schema" : {
             "type" : "integer",
             "format" : "int32",
@@ -337,7 +336,6 @@
         }, {
           "in" : "query",
           "name" : "stale_days",
-          "required" : false,
           "schema" : {
             "type" : "integer",
             "format" : "int32",
@@ -346,7 +344,6 @@
         }, {
           "in" : "query",
           "name" : "low_confidence_max",
-          "required" : false,
           "schema" : {
             "type" : "number",
             "format" : "double",
@@ -355,7 +352,6 @@
         }, {
           "in" : "query",
           "name" : "high_recall_min",
-          "required" : false,
           "schema" : {
             "type" : "integer",
             "format" : "int32",
@@ -364,7 +360,6 @@
         }, {
           "in" : "query",
           "name" : "tag_min_count",
-          "required" : false,
           "schema" : {
             "type" : "integer",
             "format" : "int32",
@@ -373,7 +368,6 @@
         }, {
           "in" : "query",
           "name" : "tag_threshold",
-          "required" : false,
           "schema" : {
             "type" : "number",
             "format" : "double",
@@ -382,7 +376,6 @@
         }, {
           "in" : "query",
           "name" : "tag_max_tags",
-          "required" : false,
           "schema" : {
             "type" : "integer",
             "format" : "int32",

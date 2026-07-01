@@ -10,6 +10,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import org.assertj.core.api.Assertions.assertThat
+import org.jooq.exception.DataAccessException
 import org.junit.jupiter.api.Test
 
 class RecallServiceTest {
@@ -23,12 +24,8 @@ class RecallServiceTest {
     private fun service(defaultModeWire: String = "fast"): RecallService {
         every { graphRetriever.retrieve(any(), any(), any()) } returns emptyList()
         return RecallService(
-            noteRepository = noteRepository,
-            recallRepository = recallRepository,
-            embeddingRepository = embeddingRepository,
-            queryEmbedder = queryEmbedder,
-            graphRetriever = graphRetriever,
-            reranker = reranker,
+            stores = RecallStores(noteRepository, recallRepository, embeddingRepository),
+            enhancers = RecallEnhancers(queryEmbedder, graphRetriever, reranker),
             observationRegistry = ObservationRegistry.NOOP,
             defaultModeWire = defaultModeWire,
             rrfK = 60,
@@ -92,7 +89,8 @@ class RecallServiceTest {
     fun `hybrid mode degrades gracefully when the embedder throws`() {
         every { recallRepository.recall("rockets", "personal", 15) } returns
             listOf(hit("ID-A"), hit("ID-B"))
-        every { queryEmbedder.embed("rockets") } throws RuntimeException("ollama down")
+        every { queryEmbedder.embed("rockets") } throws
+            QueryEmbeddingException("ollama down", IllegalStateException("ollama down"))
 
         val hits = service().recall("rockets", "personal", 5, RecallMode.HYBRID)
 
@@ -140,8 +138,8 @@ class RecallServiceTest {
             listOf(hit("GRAPH-A", score = 0.55))
         every { reranker.rerank("rockets", any(), 5) } answers {
             val input = secondArg<List<RecallHit>>()
-            assertThat(input.map { it.id }).contains("GRAPH-A")
-            input.sortedByDescending { if (it.id == "GRAPH-A") 1 else 0 }
+            assertThat(input.map { hit -> hit.id }).contains("GRAPH-A")
+            input.sortedByDescending { hit -> if (hit.id == "GRAPH-A") 1 else 0 }
         }
 
         val hits = recallService.recall("rockets", "personal", 5, RecallMode.DEEP)
@@ -188,7 +186,7 @@ class RecallServiceTest {
     @Test
     fun `recall swallows a usage-stats bump failure rather than 500ing`() {
         every { recallRepository.recall("rockets", "personal", 5) } returns listOf(hit("ID-A"))
-        every { noteRepository.bumpRecallStats(any()) } throws RuntimeException("db down")
+        every { noteRepository.bumpRecallStats(any()) } throws DataAccessException("db down")
 
         val hits = service().recall("rockets", "personal", 5, RecallMode.FAST)
 
