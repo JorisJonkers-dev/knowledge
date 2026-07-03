@@ -33,7 +33,8 @@
       'python-version': '3.12'
       'working-directory': 'ingest-worker'
       'install-command': 'python -m pip install uv==0.7.8 && uv sync --frozen'
-      'lint-command': 'uv run ruff check . && uv run mypy'
+      'lint-command': 'uv run ruff check .'
+      'typecheck-command': 'uv run mypy'
       'test-command': ''
 
   'python-unit':
@@ -44,6 +45,7 @@
       'working-directory': 'ingest-worker'
       'install-command': 'python -m pip install uv==0.7.8 && uv sync --frozen'
       'lint-command': ''
+      'typecheck-command': ''
       'test-command': 'uv run pytest --cov'
 
   'python-integration':
@@ -54,6 +56,7 @@
       'working-directory': 'ingest-worker'
       'install-command': 'python -m pip install uv==0.7.8 && uv sync --frozen'
       'lint-command': ''
+      'typecheck-command': ''
       'test-command': 'uv run pytest -m integration'
 
   'contract':

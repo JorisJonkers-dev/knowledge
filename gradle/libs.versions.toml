@@ -1,6 +1,7 @@
 [versions]
 jorisjonkers-commons = "0.7.0"
 jorisjonkers-conventions = "0.7.0"
+kotlin = "2.3.21"
 
 [libraries]
 kotlin-commons-archunit-test = { module = "dev.jorisjonkers:kotlin-commons-archunit-test", version.ref = "jorisjonkers-commons" }
@@ -18,6 +19,8 @@ kotlin-commons-vault = { module = "dev.jorisjonkers:kotlin-commons-vault", versi
 kotlin-commons-web = { module = "dev.jorisjonkers:kotlin-commons-web", version.ref = "jorisjonkers-commons" }
 
 [plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-spring = { id = "org.jetbrains.kotlin.plugin.spring", version.ref = "kotlin" }
 jorisjonkers-kotlin = { id = "dev.jorisjonkers.kotlin", version.ref = "jorisjonkers-conventions" }
 jorisjonkers-detekt = { id = "dev.jorisjonkers.detekt", version.ref = "jorisjonkers-conventions" }
 jorisjonkers-ktlint = { id = "dev.jorisjonkers.ktlint", version.ref = "jorisjonkers-conventions" }
