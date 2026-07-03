@@ -1,11 +1,24 @@
 import org.gradle.testing.jacoco.plugins.JacocoTaskExtension
 
 plugins {
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlin.spring)
     alias(libs.plugins.jorisjonkers.spring)
     alias(libs.plugins.jorisjonkers.detekt)
     alias(libs.plugins.jorisjonkers.ktlint)
     alias(libs.plugins.jorisjonkers.testing)
     alias(libs.plugins.jorisjonkers.jooq.codegen)
+}
+
+val kotlinVersion = libs.versions.kotlin.get()
+
+configurations.matching { it.name == "detekt" }.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.jetbrains.kotlin" && requested.name == "kotlin-compiler-embeddable") {
+            useVersion(kotlinVersion)
+            because("detekt 2.0.0-alpha.3 is compiled with Kotlin $kotlinVersion")
+        }
+    }
 }
 
 jooqCodegen {
