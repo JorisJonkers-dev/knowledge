@@ -75,19 +75,21 @@ def test_valid_message_is_acked_and_handed_to_handler() -> None:
     assert isinstance(note, CapturedNote)
 
 
-def test_invalid_payload_is_acked_to_avoid_redelivery_loops() -> None:
+def test_invalid_payload_is_nacked_to_dlq() -> None:
+    """Malformed JSON must be dead-lettered, not silently ACK'd."""
     handler = RecordingHandler()
     consumer = Consumer(_settings(), handler)
     channel = _FakeChannel()
 
     consumer._on_message(channel, _FakeMethod(), object(), b"{not valid json")  # type: ignore[arg-type]
 
-    assert channel.acks == [1]
-    assert channel.nacks == []
+    assert channel.acks == []
+    assert channel.nacks == [(1, False)]
     assert handler.deliveries == []
 
 
-def test_payload_missing_required_field_is_acked_and_skipped() -> None:
+def test_payload_missing_required_field_is_nacked_to_dlq() -> None:
+    """Schema violations must be dead-lettered, not silently ACK'd."""
     handler = RecordingHandler()
     consumer = Consumer(_settings(), handler)
     channel = _FakeChannel()
@@ -97,7 +99,8 @@ def test_payload_missing_required_field_is_acked_and_skipped() -> None:
     body = json.dumps(payload).encode()
     consumer._on_message(channel, _FakeMethod(), object(), body)  # type: ignore[arg-type]
 
-    assert channel.acks == [1]
+    assert channel.acks == []
+    assert channel.nacks == [(1, False)]
     assert handler.deliveries == []
 
 
