@@ -82,8 +82,8 @@ def _declare_topology(settings: Settings) -> pika.BlockingConnection:
     ch = conn.channel()
     # Main exchange
     ch.exchange_declare(exchange="knowledge", exchange_type="topic", durable=True)
-    # Dead-letter exchange (fanout so any routing key lands on the DLQ)
-    ch.exchange_declare(exchange=DLX, exchange_type="fanout", durable=True)
+    # Dead-letter exchange — topic to match the production IngestQueueConfig declaration
+    ch.exchange_declare(exchange=DLX, exchange_type="topic", durable=True)
     # DLQ — must be declared before the main queue so the DLX target exists
     ch.queue_declare(queue=DLQ, durable=True)
     ch.queue_bind(queue=DLQ, exchange=DLX, routing_key=DLQ)

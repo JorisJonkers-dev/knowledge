@@ -2,7 +2,6 @@ package com.jorisjonkers.personalstack.knowledge.queue
 
 import org.springframework.amqp.core.Binding
 import org.springframework.amqp.core.BindingBuilder
-import org.springframework.amqp.core.FanoutExchange
 import org.springframework.amqp.core.Queue
 import org.springframework.amqp.core.QueueBuilder
 import org.springframework.amqp.core.TopicExchange
@@ -28,7 +27,12 @@ import org.springframework.context.annotation.Configuration
  * Dead-letter topology:
  *   knowledge.ingest  →  x-dead-letter-exchange: knowledge.dlx
  *                         x-dead-letter-routing-key: knowledge.ingest.dlq
- *   knowledge.dlx     →  knowledge.ingest.dlq  (fanout binding)
+ *   knowledge.dlx (TopicExchange) →  knowledge.ingest.dlq
+ *
+ * The main queue sets `x-dead-letter-routing-key` to `knowledge.ingest.dlq`,
+ * so the DLQ binding uses that exact key. Keeping DLX as a TopicExchange
+ * avoids a PRECONDITION_FAILED error when rolling out onto a broker that
+ * already has `knowledge.dlx` declared as a topic exchange.
  *
  * Both parse failures (nacked by the Python worker) and handler errors
  * route to `knowledge.ingest.dlq` for visibility and manual replay.
@@ -48,9 +52,8 @@ class IngestQueueConfig {
     @Bean
     fun knowledgeExchange(): TopicExchange = TopicExchange(EXCHANGE, true, false)
 
-    /** Fanout DLX — any nacked message from the ingest queue lands here. */
     @Bean
-    fun knowledgeDlxExchange(): FanoutExchange = FanoutExchange(DLX, true, false)
+    fun knowledgeDlxExchange(): TopicExchange = TopicExchange(DLX, true, false)
 
     @Bean
     fun knowledgeIngestQueue(): Queue =
@@ -69,10 +72,14 @@ class IngestQueueConfig {
         knowledgeExchange: TopicExchange,
     ): Binding = BindingBuilder.bind(knowledgeIngestQueue).to(knowledgeExchange).with("knowledge.*")
 
-    /** Bind the DLQ to the DLX so nacked messages are routed and stored. */
+    /**
+     * Bind the DLQ to the DLX using the exact routing key the main queue
+     * stamps on dead-lettered messages, so nacked deliveries are stored
+     * rather than dropped by the broker.
+     */
     @Bean
     fun knowledgeDlqBinding(
         knowledgeIngestDlq: Queue,
-        knowledgeDlxExchange: FanoutExchange,
-    ): Binding = BindingBuilder.bind(knowledgeIngestDlq).to(knowledgeDlxExchange)
+        knowledgeDlxExchange: TopicExchange,
+    ): Binding = BindingBuilder.bind(knowledgeIngestDlq).to(knowledgeDlxExchange).with(DLQ)
 }
