@@ -1,10 +1,15 @@
 """Blocking pika consumer.
 
-Acks on a clean `handler.handle` return. Reraises everything else
-so pika's default behaviour (`requeue=True`) nacks the delivery and
-returns it to the broker. The knowledge-api side already declares
-the DLX, so terminal failures eventually land on
-`knowledge.ingest.dlq` after the broker's redelivery count trips.
+Acks on a clean ``handler.handle`` return.
+
+Parse failures (malformed JSON, schema violations, bad encoding) are
+immediately dead-lettered: ``basic_nack(requeue=False)`` routes the
+delivery through the DLX that knowledge-api declares on the ingest
+queue so the poison payload lands on ``knowledge.ingest.dlq`` and
+stays recoverable.
+
+Handler failures (vault write errors, DB errors) are also nacked
+without requeue so they flow to the same DLQ rather than vanishing.
 """
 
 from __future__ import annotations
@@ -35,7 +40,7 @@ class _Delivery:
 
 
 class Consumer:
-    """Wraps a pika `BlockingConnection` + per-delivery dispatch."""
+    """Wraps a pika ``BlockingConnection`` + per-delivery dispatch."""
 
     def __init__(
         self,
@@ -106,18 +111,15 @@ class Consumer:
         try:
             note = self._parse(delivery)
         except (ValidationError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-            # Bad payloads can't get fixed by retrying — ack so the
-            # broker doesn't redeliver the same broken message
-            # forever. A future change can route these to the
-            # dead-letter queue instead by switching to nack +
-            # requeue=false; today the broker's redelivery limit
-            # handles that path well enough.
+            # Poison payloads cannot be fixed by retrying. Dead-letter
+            # them immediately so they land on knowledge.ingest.dlq via
+            # the DLX declared by knowledge-api on this queue.
             self._log.error(
                 "consumer.parse_failed",
                 routing_key=delivery.routing_key,
                 error=str(exc),
             )
-            channel.basic_ack(delivery_tag=method.delivery_tag)
+            channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             return
 
         try:
@@ -140,6 +142,6 @@ class Consumer:
 
 
 def silence_pika_warning_logs() -> None:
-    """pika emits a noisy WARNING per `basic_qos` round-trip. Demote to INFO."""
+    """pika emits a noisy WARNING per ``basic_qos`` round-trip. Demote to INFO."""
 
     logging.getLogger("pika").setLevel(logging.INFO)

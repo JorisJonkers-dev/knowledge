@@ -1,12 +1,17 @@
-"""End-to-end smoke test: publish a `CapturedNote` payload onto the
+"""End-to-end smoke test: publish a ``CapturedNote`` payload onto the
 same topic exchange the knowledge-api side declares, then verify the
 worker consumes + dispatches to its handler.
 
 Spins up RabbitMQ via Testcontainers (Docker required). Declares the
-`knowledge` topic exchange + `knowledge.ingest` queue on the test's
+``knowledge`` topic exchange + ``knowledge.ingest`` queue on the test's
 own connection rather than relying on knowledge-api to do it — keeps
 the worker's start-up free of declaration assumptions, which is the
 production posture too.
+
+DLX topology mirrors ``IngestQueueConfig`` on the knowledge-api side:
+  knowledge.ingest  →  x-dead-letter-exchange: knowledge.dlx
+                        x-dead-letter-routing-key: knowledge.ingest.dlq
+  knowledge.dlx     →  knowledge.ingest.dlq (queue, durable)
 """
 
 from __future__ import annotations
@@ -29,6 +34,9 @@ from knowledge_worker.handlers import RecordingHandler
 from knowledge_worker.settings import Settings
 
 pytestmark = pytest.mark.integration
+
+DLX = "knowledge.dlx"
+DLQ = "knowledge.ingest.dlq"
 
 
 @pytest.fixture(scope="module")
@@ -60,6 +68,7 @@ def _settings(rabbit: dict[str, object]) -> Settings:
 
 
 def _declare_topology(settings: Settings) -> pika.BlockingConnection:
+    """Declare the full DLX topology that knowledge-api owns in production."""
     conn = pika.BlockingConnection(
         pika.ConnectionParameters(
             host=settings.rabbitmq_host,
@@ -71,8 +80,22 @@ def _declare_topology(settings: Settings) -> pika.BlockingConnection:
         )
     )
     ch = conn.channel()
+    # Main exchange
     ch.exchange_declare(exchange="knowledge", exchange_type="topic", durable=True)
-    ch.queue_declare(queue=settings.queue, durable=True)
+    # Dead-letter exchange (fanout so any routing key lands on the DLQ)
+    ch.exchange_declare(exchange=DLX, exchange_type="fanout", durable=True)
+    # DLQ — must be declared before the main queue so the DLX target exists
+    ch.queue_declare(queue=DLQ, durable=True)
+    ch.queue_bind(queue=DLQ, exchange=DLX, routing_key=DLQ)
+    # Main ingest queue wired to the DLX
+    ch.queue_declare(
+        queue=settings.queue,
+        durable=True,
+        arguments={
+            "x-dead-letter-exchange": DLX,
+            "x-dead-letter-routing-key": DLQ,
+        },
+    )
     ch.queue_bind(queue=settings.queue, exchange="knowledge", routing_key="knowledge.*")
     return conn
 
@@ -100,6 +123,22 @@ def _publish(
     conn.close()
 
 
+def _publish_raw(settings: Settings, routing_key: str, body: bytes) -> None:
+    """Publish a raw (potentially malformed) body without JSON encoding."""
+    conn = pika.BlockingConnection(
+        pika.ConnectionParameters(
+            host=settings.rabbitmq_host,
+            port=settings.rabbitmq_port,
+            credentials=pika.PlainCredentials(
+                settings.rabbitmq_user, settings.rabbitmq_password
+            ),
+        )
+    )
+    ch = conn.channel()
+    ch.basic_publish(exchange="knowledge", routing_key=routing_key, body=body)
+    conn.close()
+
+
 def _await_delivery(handler: RecordingHandler, expected: int, timeout_s: float = 10.0) -> None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -109,6 +148,32 @@ def _await_delivery(handler: RecordingHandler, expected: int, timeout_s: float =
     raise AssertionError(
         f"expected {expected} deliveries within {timeout_s}s, got {len(handler.deliveries)}"
     )
+
+
+def _await_dlq_message(
+    settings: Settings, timeout_s: float = 10.0
+) -> bytes | None:
+    """Poll the DLQ queue and return the body of the first message found."""
+    conn = pika.BlockingConnection(
+        pika.ConnectionParameters(
+            host=settings.rabbitmq_host,
+            port=settings.rabbitmq_port,
+            credentials=pika.PlainCredentials(
+                settings.rabbitmq_user, settings.rabbitmq_password
+            ),
+        )
+    )
+    ch = conn.channel()
+    deadline = time.monotonic() + timeout_s
+    try:
+        while time.monotonic() < deadline:
+            method, _, body = ch.basic_get(queue=DLQ, auto_ack=True)
+            if method is not None:
+                return body
+            time.sleep(0.05)
+        return None
+    finally:
+        conn.close()
 
 
 def _payload(routing_id: str) -> dict[str, object]:
@@ -168,6 +233,29 @@ def test_handles_three_messages_in_order(rabbit: dict[str, object]) -> None:
             "01HXYZ00000000000000000001",
             "01HXYZ00000000000000000002",
         ]
+    finally:
+        consumer.stop()
+        runner.join(timeout=5)
+
+
+def test_malformed_payload_routes_to_dlq(rabbit: dict[str, object]) -> None:
+    """A poison payload must land on the DLQ, not be silently dropped."""
+    settings = _settings(rabbit)
+    _declare_topology(settings).close()
+
+    handler = RecordingHandler()
+    consumer = Consumer(settings, handler)
+    consumer.start()
+    runner = threading.Thread(target=consumer.run_forever, daemon=True)
+    runner.start()
+
+    try:
+        _publish_raw(settings, "knowledge.lesson", b"{not valid json")
+        dlq_body = _await_dlq_message(settings)
+        assert dlq_body == b"{not valid json", (
+            "malformed payload was not routed to the DLQ"
+        )
+        assert handler.deliveries == [], "handler must not have been called for a poison payload"
     finally:
         consumer.stop()
         runner.join(timeout=5)

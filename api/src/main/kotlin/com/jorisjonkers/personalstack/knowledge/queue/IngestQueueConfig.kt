@@ -1,4 +1,3 @@
-
 package com.jorisjonkers.personalstack.knowledge.queue
 
 import org.springframework.amqp.core.Binding
@@ -6,14 +5,15 @@ import org.springframework.amqp.core.BindingBuilder
 import org.springframework.amqp.core.Queue
 import org.springframework.amqp.core.QueueBuilder
 import org.springframework.amqp.core.TopicExchange
+import org.springframework.amqp.core.FanoutExchange
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 
 /**
  * RabbitMQ topology owned by knowledge-api's write path. The Python
- * ingest worker (Phase 5) is the eventual consumer; declaring the
- * exchange + queues here means the worker can come up to a pre-bound
- * topology rather than racing to declare it on first boot.
+ * ingest worker is the eventual consumer; declaring the exchange + queues
+ * here means the worker can come up to a pre-bound topology rather than
+ * racing to declare it on first boot.
  *
  * Routing keys (topic exchange):
  *   knowledge.lesson    — capture_lesson tool
@@ -24,6 +24,14 @@ import org.springframework.context.annotation.Configuration
  * `knowledge.*` namespace via wildcard binding. The worker can split
  * into per-type queues later if throughput or backoff semantics
  * diverge — the routing key is already on the message envelope.
+ *
+ * Dead-letter topology:
+ *   knowledge.ingest  →  x-dead-letter-exchange: knowledge.dlx
+ *                         x-dead-letter-routing-key: knowledge.ingest.dlq
+ *   knowledge.dlx     →  knowledge.ingest.dlq  (fanout binding)
+ *
+ * Both parse failures (nacked by the Python worker) and handler errors
+ * route to `knowledge.ingest.dlq` for visibility and manual replay.
  */
 @Configuration
 class IngestQueueConfig {
@@ -40,8 +48,9 @@ class IngestQueueConfig {
     @Bean
     fun knowledgeExchange(): TopicExchange = TopicExchange(EXCHANGE, true, false)
 
+    /** Fanout DLX — any nacked message from the ingest queue lands here. */
     @Bean
-    fun knowledgeDlxExchange(): TopicExchange = TopicExchange(DLX, true, false)
+    fun knowledgeDlxExchange(): FanoutExchange = FanoutExchange(DLX, true, false)
 
     @Bean
     fun knowledgeIngestQueue(): Queue =
@@ -59,4 +68,11 @@ class IngestQueueConfig {
         knowledgeIngestQueue: Queue,
         knowledgeExchange: TopicExchange,
     ): Binding = BindingBuilder.bind(knowledgeIngestQueue).to(knowledgeExchange).with("knowledge.*")
+
+    /** Bind the DLQ to the DLX so nacked messages are routed and stored. */
+    @Bean
+    fun knowledgeDlqBinding(
+        knowledgeIngestDlq: Queue,
+        knowledgeDlxExchange: FanoutExchange,
+    ): Binding = BindingBuilder.bind(knowledgeIngestDlq).to(knowledgeDlxExchange)
 }

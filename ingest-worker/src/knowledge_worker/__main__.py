@@ -1,10 +1,14 @@
 """Entry point: ``python -m knowledge_worker`` (or via
 ``opentelemetry-instrument``).
 
-Today the worker only ships the consumer skeleton + the
-`LoggingHandler` — each delivery emits one structured log and is
-ACKed. The real ingest flow (LightRAG, Ollama embeddings,
-knowledge-vault git commits) lands in stacked follow-ups.
+Wires the ``VaultHandler`` (when ``VAULT_ENABLED=true``) or falls
+back to ``LoggingHandler`` for local smoke runs. ``VaultHandler``
+clones the knowledge-vault git repo, writes one markdown file per
+delivery, commits + pushes, and calls back to ``kb_notes`` via
+``PostgresNoteStore`` when ``KB_PERSIST_ENABLED=true``.
+
+Parse failures and handler errors are nacked without requeue so they
+route to ``knowledge.ingest.dlq`` via the DLX declared by knowledge-api.
 """
 
 from __future__ import annotations
