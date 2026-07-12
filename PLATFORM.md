@@ -21,10 +21,11 @@ Review `out/scorecard.md` for any failures before committing.
 
 ## Stateful workload notes
 
-`knowledge-ingest-worker` is declared `stateful: true` with `migrationPolicy.strategy: pre-deploy-job`.
-The pre-deploy job (`knowledge-vault-migrate-2026-05-18`) must complete before ingest-worker pods start.
-The registry entry in homelab-deploy carries explicit `pvcDecisions` and `migrationJobDecisions` for the
-`knowledge-vault-clone` PVC and the migration job — these must not be removed without owner approval.
+`knowledge-ingest-worker` is declared `stateful: true` with `migrationPolicy.strategy: none`.
+The vault migration job (`knowledge-vault-migrate-2026-05-18`) has already run and is decommissioned
+(owner decision 2026-07-12). `strategy: none` satisfies the schema requirement without triggering a new
+pre-deploy job. The registry entry in homelab-deploy carries `pvcDecisions` for the
+`knowledge-vault-clone` PVC — this must not be removed without owner approval.
 
 See `knowledge-onboarding-plan.md` in the migration workspace for the full state-move-plan.
 
