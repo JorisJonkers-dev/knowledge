@@ -60,9 +60,13 @@ spec:
 
     - name: knowledge-ingest-worker
       stateful: true
+      # Migration is complete (knowledge-vault-migrate-2026-05-18 has run and
+      # is decommissioned per owner decision 2026-07-12). strategy: none
+      # satisfies the schema requirement that stateful workloads declare a
+      # migrationPolicy, without triggering a new pre-deploy job.
       migrationPolicy:
-        required: true
-        strategy: pre-deploy-job
+        required: false
+        strategy: none
       rollbackTargetRetention:
         minimumDays: 90
         acknowledged: true
