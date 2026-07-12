@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/JorisJonkers-dev/knowledge/compare/v0.4.0...v0.4.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **platform:** authMode forward-auth for public-frankfurt tier ([#13](https://github.com/JorisJonkers-dev/knowledge/issues/13)) ([96940b6](https://github.com/JorisJonkers-dev/knowledge/commit/96940b661420ba7a32836d1f35a40b6890bbf500))
+
 ## [0.4.0](https://github.com/JorisJonkers-dev/knowledge/compare/v0.3.0...v0.4.0) (2026-07-12)
 
 
