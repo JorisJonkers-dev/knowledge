@@ -1,0 +1,68 @@
+# Deployment contract for knowledge (deployment v2).
+# Validated by deploy-preview.yml on every PR touching platform/ and rendered
+# into the deploy artifact by publish.yml. Run ./platform/render-local.sh for
+# a local CI-parity check.
+apiVersion: deployment.jorisjonkers.dev/v2
+kind: Deployment
+metadata:
+  name: knowledge
+spec:
+  schemaVersion: 0.16.0
+  namespace: knowledge-system
+  # platform.layer is REQUIRED for the first homelab-deploy registration
+  # (register-service derives the registry layer from it).
+  platform:
+    layer: apps-core
+  workloads:
+    - name: knowledge-api
+      health:
+        path: /api/actuator/health/readiness
+        port: 8080
+        timeoutClass: stateless
+        mandatory: true
+      rollbackTargetRetention:
+        minimumDays: 90
+        acknowledged: true
+      routes:
+        - host: kb.jorisjonkers.dev
+          owner: knowledge-api
+          authMode: sso
+          expose:
+            tier: public-frankfurt
+          rules:
+            - path: /mcp
+              port: http
+              operation: exact
+              auth:
+                scope: anonymous
+            - path: /mcp/
+              port: http
+              operation: prefix
+              auth:
+                scope: anonymous
+            - path: /install.sh
+              port: http
+              operation: exact
+              auth:
+                scope: anonymous
+            - path: /install-agents.sh
+              port: http
+              operation: exact
+              auth:
+                scope: anonymous
+            - path: /
+              port: http
+              operation: prefix
+              middleware:
+                - forward-auth
+              auth:
+                scope: authenticated
+
+    - name: knowledge-ingest-worker
+      stateful: true
+      migrationPolicy:
+        required: true
+        strategy: pre-deploy-job
+      rollbackTargetRetention:
+        minimumDays: 90
+        acknowledged: true

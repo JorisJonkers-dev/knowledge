@@ -1,0 +1,4 @@
+{
+  "knowledge-api": "ghcr.io/jorisjonkers-dev/knowledge/knowledge-api@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "knowledge-ingest-worker": "ghcr.io/jorisjonkers-dev/knowledge/knowledge-ingest-worker@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}
