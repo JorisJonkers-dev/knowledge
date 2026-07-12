@@ -26,7 +26,7 @@ spec:
       routes:
         - host: kb.jorisjonkers.dev
           owner: knowledge-api
-          authMode: sso
+          authMode: forward-auth
           expose:
             tier: public-frankfurt
           rules:
