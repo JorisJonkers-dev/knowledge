@@ -138,7 +138,7 @@ jobs:
       artifact-name: knowledge
       artifact-version: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       schema-version: 0.16.0
-      context-ref: ghcr.io/jorisjonkers-dev/cluster-deploy-context-public@sha256:0423d9bcfc091f3b6e9bd6bdd91128bb0278b97e9c9de1907e6b0817c5500232
+      context-ref: ghcr.io/jorisjonkers-dev/cluster-deploy-context-public@sha256:64d00fe03a271dbd03a48005d0a0cc6cc5fe43df23c0e97b649c2f8b3e78b418
       deploy-dir: platform
       image-lock-artifact: ${{ needs.resolve-image-lock.outputs.images-lock-artifact }}
       environments: production
