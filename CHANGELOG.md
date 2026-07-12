@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/JorisJonkers-dev/knowledge/compare/v0.3.0...v0.4.0) (2026-07-12)
+
+
+### Features
+
+* **platform:** add deploy-platform adoption files ([#12](https://github.com/JorisJonkers-dev/knowledge/issues/12)) ([59f8c72](https://github.com/JorisJonkers-dev/knowledge/commit/59f8c725c7b2b383016a93d1802fd44a12ba10c8))
+
+
+### Bug Fixes
+
+* dead-letter parse and handler failures; add DLQ binding ([#10](https://github.com/JorisJonkers-dev/knowledge/issues/10)) ([d0b715f](https://github.com/JorisJonkers-dev/knowledge/commit/d0b715f10b1b71954d1a5cb350213a4bb6933bcc))
+
 ## [0.3.0](https://github.com/JorisJonkers-dev/knowledge/compare/v0.2.0...v0.3.0) (2026-06-29)
 
 
