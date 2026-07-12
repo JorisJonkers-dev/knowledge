@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/JorisJonkers-dev/knowledge/compare/v0.4.1...v0.4.2) (2026-07-12)
+
+
+### Bug Fixes
+
+* **ci:** bump cluster context-ref to 64d00fe ([#15](https://github.com/JorisJonkers-dev/knowledge/issues/15)) ([4fb1db7](https://github.com/JorisJonkers-dev/knowledge/commit/4fb1db7507b00dcd085a6c770c21d63b78cbe29e))
+
 ## [0.4.1](https://github.com/JorisJonkers-dev/knowledge/compare/v0.4.0...v0.4.1) (2026-07-12)
 
 
