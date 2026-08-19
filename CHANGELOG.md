@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/JorisJonkers-dev/knowledge/compare/v0.4.2...v0.4.3) (2026-08-19)
+
+
+### Bug Fixes
+
+* **ci:** bump the reusable workflow pins so job timeouts apply ([#20](https://github.com/JorisJonkers-dev/knowledge/issues/20)) ([b9b99b7](https://github.com/JorisJonkers-dev/knowledge/commit/b9b99b7f910500ce8177e012803fe6376b8c0455))
+
 ## [0.4.2](https://github.com/JorisJonkers-dev/knowledge/compare/v0.4.1...v0.4.2) (2026-07-12)
 
 
