@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/JorisJonkers-dev/knowledge/compare/v0.4.3...v0.5.0) (2026-08-20)
+
+
+### Features
+
+* **ci:** publish images for arm64 as well as amd64 ([#22](https://github.com/JorisJonkers-dev/knowledge/issues/22)) ([cc86003](https://github.com/JorisJonkers-dev/knowledge/commit/cc860035330af0f6d565401420136c92bfdf10d8))
+
 ## [0.4.3](https://github.com/JorisJonkers-dev/knowledge/compare/v0.4.2...v0.4.3) (2026-08-19)
 
 
