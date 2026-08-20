@@ -31,6 +31,7 @@ jobs:
   publish-api-image:
     uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@4b444f9a50edf76e4aea4148d73407c34a1e43a4 # v0.12.1
     with:
+      platforms: linux/amd64,linux/arm64
       image-name: knowledge/knowledge-api
       dockerfile: api/Dockerfile
       version: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -42,6 +43,7 @@ jobs:
   publish-worker-image:
     uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@4b444f9a50edf76e4aea4148d73407c34a1e43a4 # v0.12.1
     with:
+      platforms: linux/amd64,linux/arm64
       image-name: knowledge/knowledge-ingest-worker
       dockerfile: ingest-worker/Dockerfile
       version: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
