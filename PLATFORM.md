@@ -6,6 +6,20 @@
 ./platform/render-local.sh
 ```
 
+Requires `node`, plus either `oras` (to pull the cluster context by digest) or
+`--context-dir` pointing at an already-pulled context package. Installing the
+pinned toolkit reads `npm.pkg.github.com`, which needs a token even for public
+packages:
+
+```bash
+export GITHUB_TOKEN="$(gh auth token)"
+```
+
+The check runs `@jorisjonkers-dev/deploy-check`, the same code the
+`deploy-preview` action runs, so a local result and a CI result agree. The
+schema version and context ref are read from this repository's workflows rather
+than restated in the script.
+
 Review `out/scorecard.md` for any failures before committing.
 
 ## Full deployment flow
