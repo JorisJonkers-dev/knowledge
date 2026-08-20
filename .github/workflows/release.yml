@@ -94,23 +94,3 @@
     'secrets':
       'packages-token': '${{ secrets.GITHUB_TOKEN }}'
       'node-auth-token': '${{ secrets.GITHUB_TOKEN }}'
-
-  'publish-deploy-bundle':
-    'name': 'Publish Deploy Bundle'
-    'needs':
-      - 'release-please'
-      - 'publish-images'
-    'if': '${{ needs.release-please.outputs.release_created == ''true'' }}'
-    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/deploy-bundle.yml@v0.14.1'
-    'permissions':
-      'contents': 'read'
-      'packages': 'write'
-    'with':
-      'deploy-dir': 'deploy'
-      'images': 'deploy/images.json'
-      'package-version': '0.9.0'
-      'version': '${{ needs.release-please.outputs.tag_name }}'
-      'bundle-name': 'knowledge'
-      'publish': true
-    'secrets':
-      'packages-token': '${{ secrets.GITHUB_TOKEN }}'

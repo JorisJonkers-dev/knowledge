@@ -165,22 +165,6 @@
           'build-args': |
             GIT_SHA=${{ github.sha }}
 
-  'deploy-bundle':
-    'name': 'Deploy Bundle Dry Run'
-    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/deploy-bundle.yml@v0.14.1'
-    'permissions':
-      'contents': 'read'
-      'packages': 'write'
-    'with':
-      'deploy-dir': 'deploy'
-      'images': 'deploy/images.json'
-      'package-version': '0.9.0'
-      'version': '0.0.0-ci.${{ github.run_number }}.${{ github.run_attempt }}'
-      'bundle-name': 'knowledge'
-      'publish': false
-    'secrets':
-      'packages-token': '${{ secrets.GITHUB_TOKEN }}'
-
   'migration-guard':
     'name': 'Migration Guard'
     'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/migration-guard.yml@v0.14.1'
@@ -199,7 +183,6 @@
       - 'contract'
       - 'client-dry-run'
       - 'docker'
-      - 'deploy-bundle'
       - 'migration-guard'
     'runs-on': 'ubuntu-latest'
     'steps':
