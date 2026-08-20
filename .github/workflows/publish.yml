@@ -29,7 +29,7 @@ permissions: {}
 jobs:
   # -- 1a. Build and push knowledge-api image --------------------------------
   publish-api-image:
-    uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@bbcfef9e7127e5d8a6215a7142a0fa9cc2ad5055 # v0.16.0
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@6d4af5313cc39386fff796fa89ea940ef5f0819d # v0.16.1
     with:
       platforms: linux/amd64,linux/arm64
       image-name: knowledge/knowledge-api
@@ -41,7 +41,7 @@ jobs:
 
   # -- 1b. Build and push knowledge-ingest-worker image ----------------------
   publish-worker-image:
-    uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@bbcfef9e7127e5d8a6215a7142a0fa9cc2ad5055 # v0.16.0
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@6d4af5313cc39386fff796fa89ea940ef5f0819d # v0.16.1
     with:
       platforms: linux/amd64,linux/arm64
       image-name: knowledge/knowledge-ingest-worker
@@ -135,7 +135,7 @@ jobs:
   # -- 3. Render and publish the deploy artifact ----------------------------
   publish-deploy-artifact:
     needs: [resolve-image-lock]
-    uses: JorisJonkers-dev/github-workflows/.github/workflows/deploy-artifact.yml@bbcfef9e7127e5d8a6215a7142a0fa9cc2ad5055 # v0.16.0
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/deploy-artifact.yml@6d4af5313cc39386fff796fa89ea940ef5f0819d # v0.16.1
     with:
       ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
       artifact-name: knowledge
