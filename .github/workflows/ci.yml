@@ -62,6 +62,7 @@
   'contract':
     'name': 'Contract Drift'
     'runs-on': 'ubuntu-latest'
+    'timeout-minutes': 30
     'env':
       'GITHUB_ACTOR': '${{ github.actor }}'
       'GITHUB_TOKEN': '${{ secrets.GITHUB_TOKEN }}'
@@ -137,6 +138,7 @@
   'docker':
     'name': 'Docker Dry Run'
     'runs-on': 'ubuntu-latest'
+    'timeout-minutes': 30
     'steps':
       - 'uses': 'actions/checkout@v6'
 
@@ -185,6 +187,7 @@
       - 'docker'
       - 'migration-guard'
     'runs-on': 'ubuntu-latest'
+    'timeout-minutes': 30
     'steps':
       - 'name': 'Verify all gating jobs succeeded'
         'uses': 're-actors/alls-green@release/v1'

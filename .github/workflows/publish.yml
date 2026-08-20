@@ -55,6 +55,7 @@ jobs:
   resolve-image-lock:
     needs: [publish-api-image, publish-worker-image]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: read
