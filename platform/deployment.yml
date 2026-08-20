@@ -59,6 +59,12 @@ spec:
                 scope: authenticated
 
     - name: knowledge-ingest-worker
+      # A RabbitMQ consumer with no HTTP surface: its cluster manifest declares
+      # no ports and no probes, so there is nothing to probe. mandatory: false
+      # records that deliberately, rather than leaving health undeclared and
+      # indistinguishable from an oversight.
+      health:
+        mandatory: false
       stateful: true
       # Migration is complete (knowledge-vault-migrate-2026-05-18 has run and
       # is decommissioned per owner decision 2026-07-12). strategy: none
