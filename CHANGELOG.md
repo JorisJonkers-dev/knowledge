@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.0](https://github.com/JorisJonkers-dev/knowledge/compare/v0.5.0...v0.6.0) (2026-08-21)
+
+
+### Features
+
+* **ci:** add the deploy-preview workflow PLATFORM.md already documents ([#31](https://github.com/JorisJonkers-dev/knowledge/issues/31)) ([3c4eac2](https://github.com/JorisJonkers-dev/knowledge/commit/3c4eac2951448ae850a2f73148229a470058424b))
+* **platform:** add the render-local.sh that PLATFORM.md already documents ([#25](https://github.com/JorisJonkers-dev/knowledge/issues/25)) ([f1dd9e6](https://github.com/JorisJonkers-dev/knowledge/commit/f1dd9e6a40f3699aa15b2522fbd0541371d90ebe))
+* **platform:** declare the ingest worker exempt from the health check ([#30](https://github.com/JorisJonkers-dev/knowledge/issues/30)) ([2d4f689](https://github.com/JorisJonkers-dev/knowledge/commit/2d4f689dd4758464a3680776538af4fa5113c0dd))
+
 ## [0.5.0](https://github.com/JorisJonkers-dev/knowledge/compare/v0.4.3...v0.5.0) (2026-08-20)
 
 
