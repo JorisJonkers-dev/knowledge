@@ -17,6 +17,7 @@ spec:
     - name: knowledge-api
       health:
         path: /api/actuator/health/readiness
+        livenessPath: /api/actuator/health/liveness
         port: 8080
         timeoutClass: stateless
         mandatory: true
