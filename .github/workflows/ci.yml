@@ -59,6 +59,28 @@
       'typecheck-command': ''
       'test-command': 'uv run pytest -m integration'
 
+  'memory-sync-lint':
+    'name': 'Memory Sync Lint'
+    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/python-ci.yml@v0.14.1'
+    'with':
+      'python-version': '3.12'
+      'working-directory': 'basic-memory-git-sync'
+      'install-command': 'python -m pip install uv==0.7.8 && uv sync --frozen'
+      'lint-command': 'uv run ruff check .'
+      'typecheck-command': 'uv run mypy'
+      'test-command': ''
+
+  'memory-sync-unit':
+    'name': 'Memory Sync Unit'
+    'uses': 'JorisJonkers-dev/github-workflows/.github/workflows/python-ci.yml@v0.14.1'
+    'with':
+      'python-version': '3.12'
+      'working-directory': 'basic-memory-git-sync'
+      'install-command': 'python -m pip install uv==0.7.8 && uv sync --frozen'
+      'lint-command': ''
+      'typecheck-command': ''
+      'test-command': 'uv run pytest --cov'
+
   'contract':
     'name': 'Contract Drift'
     'runs-on': 'ubuntu-latest'
