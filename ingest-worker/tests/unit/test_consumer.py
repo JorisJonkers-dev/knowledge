@@ -17,6 +17,7 @@ import pytest
 
 from knowledge_worker.consumer import Consumer
 from knowledge_worker.handlers import Handler, RecordingHandler
+from knowledge_worker.jobs import IngestionJobService, InMemoryJobStore
 from knowledge_worker.messages import CapturedNote
 from knowledge_worker.settings import Settings
 
@@ -163,3 +164,61 @@ def test_start_uses_injected_connection_factory(monkeypatch: pytest.MonkeyPatch)
     assert len(calls) == 1
     assert calls[0].host.endswith("data-system.svc.cluster.local")
     consumer.stop()
+
+
+# -- #246 job-store wiring: replay acks with no re-handle, retry nacks,
+#    deadletter acks in place of an endless redelivery loop. --
+
+
+def test_job_store_replay_acks_without_re_handling_handler() -> None:
+    handler = RecordingHandler()
+    svc = IngestionJobService(InMemoryJobStore())
+    consumer = Consumer(_settings(), handler, job_service=svc)
+    channel = _FakeChannel()
+
+    # First delivery is processed + persisted; handler sees it once.
+    consumer._on_message(channel, _FakeMethod(), object(), _valid_body())  # type: ignore[arg-type]
+    assert len(handler.deliveries) == 1
+    assert channel.acks == [1]
+
+    # Redelivery of the identical import is dedup'd: ACK, no handler call.
+    consumer._on_message(channel, _FakeMethod(delivery_tag=2), object(), _valid_body())  # type: ignore[arg-type]
+    assert len(handler.deliveries) == 1  # handler NOT called again
+    assert channel.acks == [1, 2]
+    assert channel.nacks == []
+
+
+def test_job_store_success_path_marks_record_done() -> None:
+    handler = RecordingHandler()
+    svc = IngestionJobService(InMemoryJobStore())
+    consumer = Consumer(_settings(), handler, job_service=svc)
+    channel = _FakeChannel()
+
+    note = json.loads(_valid_body())
+    consumer._on_message(channel, _FakeMethod(), object(), json.dumps(note).encode())  # type: ignore[arg-type]
+
+    assert channel.acks == [1]
+    assert svc.count_records(note["id"]) == 1
+    assert svc._store.get_job(note["id"]).state.value == "done"  # type: ignore[union-attr]
+
+
+def test_job_store_retryable_failure_nacks_and_accumulates_attempts() -> None:
+    class _Boom:
+        deliveries = 0
+
+        def handle(self, routing_key: str, note: CapturedNote) -> None:
+            _Boom.deliveries += 1
+            raise RuntimeError("downstream on fire")
+
+    svc = IngestionJobService(InMemoryJobStore(), max_attempts=2)
+    consumer = Consumer(_settings(), _Boom(), job_service=svc)
+    channel = _FakeChannel()
+
+    consumer._on_message(channel, _FakeMethod(), object(), _valid_body())  # type: ignore[arg-type]
+    assert channel.nacks == [(1, False)]  # redeliver, attempt budget intact
+
+    # Redelivery -> second (final) attempt -> deadletter, which ACKs.
+    consumer._on_message(channel, _FakeMethod(delivery_tag=2), object(), _valid_body())  # type: ignore[arg-type]
+    assert _Boom.deliveries == 2
+    assert channel.nacks == [(1, False)]  # no new nack
+    assert channel.acks == [2]  # dead-lettered: ACK so the loop stops

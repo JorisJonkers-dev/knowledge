@@ -27,6 +27,7 @@ from pika.spec import Basic, BasicProperties
 from pydantic import ValidationError
 
 from knowledge_worker.handlers import Handler
+from knowledge_worker.jobs import IngestionJobService, JobState
 from knowledge_worker.messages import CapturedNote
 from knowledge_worker.settings import Settings
 
@@ -48,10 +49,12 @@ class Consumer:
         handler: Handler,
         *,
         connection_factory: ConnectionFactory | None = None,
+        job_service: IngestionJobService | None = None,
     ) -> None:
         self._settings = settings
         self._handler = handler
         self._connection_factory = connection_factory or pika.BlockingConnection
+        self._job_service = job_service
         self._log = structlog.get_logger(__name__)
         self._connection: pika.BlockingConnection | None = None
         self._channel: BlockingChannel | None = None
@@ -123,7 +126,7 @@ class Consumer:
             return
 
         try:
-            self._handler.handle(delivery.routing_key, note)
+            self._handle(delivery.routing_key, note)
         except Exception:
             self._log.exception(
                 "consumer.handle_failed",
@@ -139,6 +142,44 @@ class Consumer:
     def _parse(delivery: _Delivery) -> CapturedNote:
         payload = json.loads(delivery.body.decode("utf-8"))
         return CapturedNote.model_validate(payload)
+
+    def _handle(self, routing_key: str, note: CapturedNote) -> None:
+        """Dispatch one parsed note, optionally through the job store.
+
+        Without a job store this is the legacy write-through path. With
+        one, the note is idempotently claimed (dedup'd), each pending
+        outbox record is handed to the handler, and the outcome is
+        persisted:
+
+        * success  -> ``succeed`` (advances the checkpoint / finalises).
+        * failure  -> ``fail`` on the attempt counter; retryable failures
+          re-raise so the broker redelivers (driving attempt 2..n), the
+          final exhausted attempt dead-letters and is ACK'd here (the
+          deadletter row *is* the DLQ — no endless redelivery).
+        """
+        if self._job_service is None:
+            self._handler.handle(routing_key, note)
+            return
+        batch = self._job_service.begin([note])
+        if batch.is_replay:
+            self._log.info("consumer.replay_skipped", id=note.id)
+            return
+        for record in batch.pending_records():
+            materialized = CapturedNote.model_validate(record.payload)
+            try:
+                self._handler.handle(routing_key, materialized)
+            except Exception as exc:
+                state = self._job_service.fail(batch, record, str(exc))
+                if state is JobState.DEADLETTER:
+                    self._log.error(
+                        "consumer.deadletter",
+                        id=note.id,
+                        source_id=batch.job.source_id,
+                        error=str(exc),
+                    )
+                    return  # durable deadletter row; ack, do not redeliver
+                raise
+            self._job_service.succeed(batch, record)
 
 
 def silence_pika_warning_logs() -> None:

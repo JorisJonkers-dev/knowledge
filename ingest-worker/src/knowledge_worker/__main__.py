@@ -23,6 +23,7 @@ from git import Actor
 
 from knowledge_worker.consumer import Consumer, silence_pika_warning_logs
 from knowledge_worker.handlers import Handler, LoggingHandler, VaultHandler
+from knowledge_worker.jobs import IngestionJobService, PostgresJobStore
 from knowledge_worker.settings import Settings
 from knowledge_worker.store import NoteStore, NullNoteStore, PostgresNoteStore
 from knowledge_worker.telemetry import configure as configure_telemetry
@@ -63,13 +64,40 @@ def _build_handler(settings: Settings, log: structlog.BoundLogger) -> Handler:
     return VaultHandler(writer, store)
 
 
+def _build_job_service(
+    settings: Settings, log: structlog.BoundLogger
+) -> IngestionJobService | None:
+    """Wire #246 job store into the consumer when the DB is reachable.
+
+    The job/outbox/source-manifest tables carry dedup, resume + deadletter
+    state. They share the same Postgres as ``kb_notes``; when ``KB_PERSIST``
+    is off there is no DB to back them, so the consumer falls back to the
+    legacy write-through path (no dedup).
+    """
+    if not settings.kb_persist_enabled:
+        log.info("handler.job_store.disabled")
+        return None
+    store = PostgresJobStore(
+        host=settings.db_host,
+        port=settings.db_port,
+        database=settings.db_name,
+        user=settings.db_user,
+        password=settings.db_password,
+    )
+    store.open()
+    log.info("handler.job_store.ready", db=settings.db_name)
+    return IngestionJobService(store)
+
+
 def main() -> int:
     settings = Settings.from_env()
     configure_telemetry(level=settings.log_level, service_version=settings.service_version)
     silence_pika_warning_logs()
     log = structlog.get_logger(__name__)
 
-    consumer = Consumer(settings, _build_handler(settings, log))
+    consumer = Consumer(
+        settings, _build_handler(settings, log), job_service=_build_job_service(settings, log)
+    )
 
     def shutdown(signum: int, _frame: FrameType | None) -> None:
         log.info("consumer.shutdown.signal", signal=signum)
