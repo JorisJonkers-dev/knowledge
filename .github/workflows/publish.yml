@@ -3,11 +3,12 @@
 # push of a v*.*.* tag drives:
 #   publish-api-image \
 #                      -> resolve-image-lock -> publish-deploy-artifact -> register-service
-#   publish-worker-image /
+#   publish-worker-image/
+#   publish-memory-sync-image
 #
-# Two images (knowledge-api, knowledge-ingest-worker) are built in parallel and
-# their digests are merged into a single platform/images.lock.json before the
-# deploy artifact is rendered.
+# Three images (knowledge-api, knowledge-ingest-worker, basic-memory-git-sync)
+# are built in parallel and their digests are merged into a single
+# platform/images.lock.json before the deploy artifact is rendered.
 #
 # Boundary rule (R1-2): the image lock crosses the reusable-workflow boundary
 # as an UPLOADED ARTIFACT (image-lock-artifact), never as a runner-local path.
@@ -51,9 +52,21 @@ jobs:
       contents: read
       packages: write
 
+  # -- 1c. Build and push basic-memory-git-sync image ------------------------
+  publish-memory-sync-image:
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@6d4af5313cc39386fff796fa89ea940ef5f0819d # v0.16.1
+    with:
+      platforms: linux/amd64,linux/arm64
+      image-name: knowledge/basic-memory-git-sync
+      dockerfile: basic-memory-git-sync/Dockerfile
+      version: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    permissions:
+      contents: read
+      packages: write
+
   # -- 2. Resolve the image lock (upload artifact, never path) --------------
   resolve-image-lock:
-    needs: [publish-api-image, publish-worker-image]
+    needs: [publish-api-image, publish-worker-image, publish-memory-sync-image]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -97,27 +110,44 @@ jobs:
           fi
           echo "image-digest=$digest" >> "$GITHUB_OUTPUT"
 
+      - name: resolve-memory-sync-digest
+        id: memory-sync-digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ghcr.io/jorisjonkers-dev/knowledge/basic-memory-git-sync
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{json .Manifest}}' | jq -r '.digest')"
+          if [ -z "$digest" ] || [ "$digest" = "null" ]; then
+            echo "E_FLOATING_IMAGE: could not resolve a digest for ${IMAGE}:${TAG}" >&2
+            exit 1
+          fi
+          echo "image-digest=$digest" >> "$GITHUB_OUTPUT"
+
       - name: lock-images
         env:
           API_DIGEST: ${{ steps.api-digest.outputs.image-digest }}
           WORKER_DIGEST: ${{ steps.worker-digest.outputs.image-digest }}
+          MEMORY_SYNC_DIGEST: ${{ steps.memory-sync-digest.outputs.image-digest }}
         run: |
           set -euo pipefail
-          for digest in "$API_DIGEST" "$WORKER_DIGEST"; do
+          for digest in "$API_DIGEST" "$WORKER_DIGEST" "$MEMORY_SYNC_DIGEST"; do
             case "$digest" in
               sha256:*) ;;
               *) echo "E_FLOATING_IMAGE: digest is not a digest ref (got: $digest)" >&2; exit 1 ;;
             esac
           done
-          printf '{"knowledge-api":"ghcr.io/jorisjonkers-dev/knowledge/knowledge-api@%s","knowledge-ingest-worker":"ghcr.io/jorisjonkers-dev/knowledge/knowledge-ingest-worker@%s"}\n' \
-            "$API_DIGEST" "$WORKER_DIGEST" > platform/images.lock.json
+          printf '{"knowledge-api":"ghcr.io/jorisjonkers-dev/knowledge/knowledge-api@%s","knowledge-ingest-worker":"ghcr.io/jorisjonkers-dev/knowledge/knowledge-ingest-worker@%s","basic-memory-git-sync":"ghcr.io/jorisjonkers-dev/knowledge/basic-memory-git-sync@%s"}\n' \
+            "$API_DIGEST" "$WORKER_DIGEST" "$MEMORY_SYNC_DIGEST" > platform/images.lock.json
           echo "Locked api: ghcr.io/jorisjonkers-dev/knowledge/knowledge-api@${API_DIGEST}"
           echo "Locked worker: ghcr.io/jorisjonkers-dev/knowledge/knowledge-ingest-worker@${WORKER_DIGEST}"
+          echo "Locked memory-sync: ghcr.io/jorisjonkers-dev/knowledge/basic-memory-git-sync@${MEMORY_SYNC_DIGEST}"
 
       - name: verify-lock
         run: |
           set -euo pipefail
-          for key in knowledge-api knowledge-ingest-worker; do
+          for key in knowledge-api knowledge-ingest-worker basic-memory-git-sync; do
             ref=$(jq -r --arg k "$key" '.[$k]' platform/images.lock.json)
             case "$ref" in
               *@sha256:*) echo "Digest pin verified: $ref" ;;
