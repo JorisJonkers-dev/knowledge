@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -175,13 +176,23 @@ class VaultGitBackstop:
         return self._repo
 
 
-def run_forever(settings: Settings) -> None:
+def run_forever(
+    settings: Settings,
+    *,
+    max_iterations: int | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> None:
     """Poll loop used by the CLI entry point.
 
     In production the vault_dir is a git checkout on a shared RWO PVC that
     Basic Memory writes into; ``attach()`` reuses it. ``clone_url`` is only
     used to clone on first boot (and in tests, which point it at a temp bare
     repo).
+
+    ``max_iterations`` and ``sleep_fn`` are test seams: a bounded run drives
+    the real loop once and checks the commit + halt behaviour without looping
+    forever, matching the estate habit of proving the loop rather than
+    trusting it.
     """
     log = structlog.get_logger(__name__)
     backstop = VaultGitBackstop(
@@ -194,8 +205,10 @@ def run_forever(settings: Settings) -> None:
     )
     log.info("backstop.boot", version=settings.service_version, dir=settings.vault_dir)
     backstop.attach()
+    iterations = 0
     try:
-        while True:
+        while max_iterations is None or iterations < max_iterations:
+            iterations += 1
             try:
                 backstop.poll_once()
             except GitCommandError as exc:
@@ -203,9 +216,9 @@ def run_forever(settings: Settings) -> None:
                 # (or a retry after reconciling) resolves it; we must not
                 # auto-resolve and drop an edit. Bounded wait before exiting.
                 log.error("backstop.halted", error=str(exc))
-                time.sleep(10)
+                sleep_fn(10)
                 break
-            time.sleep(settings.poll_seconds)
+            sleep_fn(settings.poll_seconds)
     finally:
         backstop.close()
 

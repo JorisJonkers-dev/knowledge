@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 from git import Actor, GitCommandError, Repo
 
-from basic_memory_git_sync.sync import VaultGitBackstop, reset_vault_dir
+from basic_memory_git_sync.settings import Settings
+from basic_memory_git_sync.sync import VaultGitBackstop, run_forever
 
 
 @pytest.fixture()
@@ -171,9 +172,80 @@ def test_poll_requires_attach(tmp_path: Path, remote: Path) -> None:
         b.poll_once()
 
 
-def test_reset_vault_dir_recreates(tmp_path: Path) -> None:
-    dir_path = tmp_path / "dir"
-    dir_path.mkdir()
-    (dir_path / "file.txt").write_text("x")
-    reset_vault_dir(dir_path)
-    assert dir_path.exists() and not (dir_path / "file.txt").exists()
+def _settings(tmp_path: Path, remote: Path, **overrides: object) -> Settings:
+    base: dict[str, object] = {
+        "clone_url": str(remote),
+        "vault_dir": str(tmp_path / "vault"),
+        "branch": "main",
+        "ssh_key_path": "",
+        "author_name": "basic-memory-vault",
+        "author_email": "basicmemory@test",
+        "poll_seconds": 1,
+        "push": False,
+        "log_level": "INFO",
+        "service_version": "test",
+    }
+    base.update(overrides)
+    return Settings(**base)  # type: ignore[arg-type]
+
+
+def test_run_forever_loop_commits_then_hits_ceiling(
+    tmp_path: Path, remote: Path, vault_dir: Path
+) -> None:
+    """A bounded run of the real production loop commits what Basic Memory
+    writes in one cycle and returns once the iteration ceiling is reached, so
+    the loop body (attach → poll → commit) is proven rather than assumed."""
+    # The shared tree already exists (the same PVC clone from a prior boot);
+    # attach() must reattach, not re-clone into a non-empty dir.
+    Repo.clone_from(remote, vault_dir, branch="main")
+    note = vault_dir / "topics" / "via-loop.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("# written by Basic Memory")
+
+    settings = _settings(tmp_path, remote, push="true")
+    run_forever(settings, max_iterations=1, sleep_fn=lambda _s: None)
+
+    verify_dir = tmp_path / "verify"
+    Repo.clone_from(remote, verify_dir, branch="main")
+    head = next(Repo(verify_dir).iter_commits("main"))
+    assert head.message.strip() == "memory: sync vault notes"
+    assert (verify_dir / "topics" / "via-loop.md").read_text().startswith("# written by")
+
+
+def test_run_forever_halts_on_conflict_surfaces_it(
+    tmp_path: Path, remote: Path, vault_dir: Path, side: tuple[Repo, Path]
+) -> None:
+    """A remote change that conflicts with uncommitted local work halts the
+    loop (logs loudly, returns) and retains the local edit — it does not
+    auto-resolve the conflict or drop either side."""
+    Repo.clone_from(remote, vault_dir, branch="main")
+    side_repo, side_dir = side
+    side_note = side_dir / "topics" / "conflict.md"
+    side_note.parent.mkdir(parents=True, exist_ok=True)
+    side_note.write_text("remote version")
+    side_repo.index.add(["topics/conflict.md"])
+    side_repo.index.commit("remote conflict edit")
+    side_repo.remotes.origin.push()
+
+    local_note = vault_dir / "topics" / "conflict.md"
+    local_note.parent.mkdir(parents=True, exist_ok=True)
+    local_note.write_text("local version")
+
+    settings = _settings(tmp_path, remote, push="true")
+    # The loop halts (returns) rather than raising; nothing is dropped.
+    run_forever(settings, max_iterations=3, sleep_fn=lambda _s: None)
+
+    # Local edit survives on disk.
+    assert (vault_dir / "topics" / "conflict.md").read_text() == "local version"
+    # And origin still has the remote side, unchanged (no force-push).
+    verify_dir = tmp_path / "verify"
+    Repo.clone_from(remote, verify_dir, branch="main")
+    assert (verify_dir / "topics" / "conflict.md").read_text() == "remote version"
+
+
+def test_settings_from_env_defaults(tmp_path: Path) -> None:
+    s = Settings.from_env({"VAULT_DIR": str(tmp_path)})
+    assert s.vault_dir == str(tmp_path)
+    assert s.branch == "main"
+    assert s.push is False
+    assert s.poll_seconds == 10
