@@ -93,16 +93,16 @@ def test_attach_readds_origin_when_missing(tmp_path: Path, remote: Path) -> None
     """A previous crashed boot left a .git with no origin remote.
 
     Reproduces the production crash: a prior boot did ``Repo.init`` but died
-    before ``create_remote``/fetch persisted, so ``attach()`` sees a real
-    .git but ``repo.remotes.origin`` raises. The new ``_origin()`` look-up
-    must re-register the remote and fetch instead of crashing.
+    before the remote/fetch persisted, so ``attach()`` sees a real .git but
+    no usable origin. attach() must re-add origin (git remote + fetch) and
+    adopt the tracked branch instead of crashing.
     """
     v = tmp_path / "vault"
     v.mkdir(parents=True)
     Repo.init(v)
     b = VaultGitBackstop(clone_url=str(remote), vault_dir=v, push=False)
     b.attach()  # must not raise
-    assert b._repo.remotes["origin"].url == str(remote)
+    assert b._repo.git.remote("get-url", "origin") == str(remote)
     assert b._repo.active_branch.name == "main"
 
 
