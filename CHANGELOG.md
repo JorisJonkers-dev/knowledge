@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/JorisJonkers-dev/knowledge/compare/v0.6.1...v0.6.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* **sidecar:** re-register a missing origin remote instead of crashing on attach ([#52](https://github.com/JorisJonkers-dev/knowledge/issues/52)) ([31bb2ae](https://github.com/JorisJonkers-dev/knowledge/commit/31bb2ae923cde9a9697e3bcdadc1c057247b268e))
+
 ## [0.6.1](https://github.com/JorisJonkers-dev/knowledge/compare/v0.6.0...v0.6.1) (2026-09-10)
 
 
