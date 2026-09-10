@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/JorisJonkers-dev/knowledge/compare/v0.6.0...v0.6.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **sidecar:** adopt a non-empty non-git vault dir instead of failing to clone ([#50](https://github.com/JorisJonkers-dev/knowledge/issues/50)) ([d933260](https://github.com/JorisJonkers-dev/knowledge/commit/d933260ac3d6402a629649ec0e50c66ff36a520d))
+
 ## [0.6.0](https://github.com/JorisJonkers-dev/knowledge/compare/v0.5.0...v0.6.0) (2026-09-10)
 
 
