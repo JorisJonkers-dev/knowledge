@@ -89,6 +89,23 @@ def test_attach_adopts_existing_non_git_dir(tmp_path: Path, remote: Path) -> Non
     assert b._repo.remotes.origin.url == str(remote)
 
 
+def test_attach_readds_origin_when_missing(tmp_path: Path, remote: Path) -> None:
+    """A previous crashed boot left a .git with no origin remote.
+
+    Reproduces the production crash: a prior boot did ``Repo.init`` but died
+    before ``create_remote``/fetch persisted, so ``attach()`` sees a real
+    .git but ``repo.remotes.origin`` raises. The new ``_origin()`` look-up
+    must re-register the remote and fetch instead of crashing.
+    """
+    v = tmp_path / "vault"
+    v.mkdir(parents=True)
+    Repo.init(v)
+    b = VaultGitBackstop(clone_url=str(remote), vault_dir=v, push=False)
+    b.attach()  # must not raise
+    assert b._repo.remotes["origin"].url == str(remote)
+    assert b._repo.active_branch.name == "main"
+
+
 def test_poll_commits_nothing_when_clean(backstop: VaultGitBackstop) -> None:
     result = backstop.poll_once()
     assert result.committed is False
