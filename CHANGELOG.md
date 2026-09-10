@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.3](https://github.com/JorisJonkers-dev/knowledge/compare/v0.6.2...v0.6.3) (2026-09-10)
+
+
+### Bug Fixes
+
+* **sidecar:** recover origin via git commands, tolerate unborn HEAD ([#54](https://github.com/JorisJonkers-dev/knowledge/issues/54)) ([801b51a](https://github.com/JorisJonkers-dev/knowledge/commit/801b51a6302ca6010f5653b097f0f6b645dfb3d7))
+
 ## [0.6.2](https://github.com/JorisJonkers-dev/knowledge/compare/v0.6.1...v0.6.2) (2026-09-10)
 
 
