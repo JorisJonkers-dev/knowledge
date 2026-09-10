@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Protocol
 
 import structlog
-from git import Actor, GitCommandError, Repo
+from git import Actor, GitCommandError, Remote, Repo
 
 from basic_memory_git_sync.settings import Settings
 
@@ -98,7 +98,15 @@ class VaultGitBackstop:
         if self._vault_dir.exists() and (self._vault_dir / ".git").exists():
             self._repo = Repo(self._vault_dir)
             self._log.info("backstop.attached", dir=str(self._vault_dir))
-            self._repo.remotes.origin.fetch()
+            origin = self._origin()
+            if origin is None:
+                # A previous crashed boot left a .git with no origin remote
+                # (e.g. Repo.init persisted but the create_remote/fetch did
+                # not). Re-register it before fetching so attach converges
+                # instead of crashing on the missing `.origin`.
+                self._log.info("backstop.registering_origin", dir=str(self._vault_dir))
+                origin = self._repo.create_remote("origin", self._clone_url)
+            origin.fetch()
             return
 
         self._vault_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -199,6 +207,21 @@ class VaultGitBackstop:
         if self._repo is None:
             raise RuntimeError("VaultGitBackstop.attach() must be called before poll_once()")
         return self._repo
+
+    def _origin(self) -> Remote | None:
+        """Look up the `origin` remote by name, or None if absent.
+
+        GitPython's ``repo.remotes.origin`` attribute raises when no remote
+        named ``origin`` is registered (e.g. after a crashed ``Repo.init``
+        that persisted the repo without the remote). Look it up defensively
+        by name so attach() can re-register it instead of crashing.
+        """
+        if self._repo is None:
+            return None
+        try:
+            return self._repo.remotes["origin"]
+        except IndexError:
+            return None
 
 
 def run_forever(
