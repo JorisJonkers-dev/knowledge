@@ -68,6 +68,27 @@ def test_attach_reuses_existing_checkout(tmp_path: Path, remote: Path) -> None:
     b.attach()  # no error
 
 
+def test_attach_adopts_existing_non_git_dir(tmp_path: Path, remote: Path) -> None:
+    """First boot on a shared PVC root that is non-empty but not a git repo.
+
+    Reproduces the production failure: another container (or the vault-agent
+    secrets mount) has already written into the vault PVC root, so
+    ``clone_from`` would refuse per "destination path exists and is not an
+    empty directory". attach() must init + fetch into the adopted dir instead
+    of failing, without discarding what is already on the volume.
+    """
+    v = tmp_path / "vault"
+    v.mkdir(parents=True)
+    (v / "secrets").mkdir()  # e.g. the vault-agent secrets overlay
+    b = VaultGitBackstop(clone_url=str(remote), vault_dir=v, push=False)
+    b.attach()
+    assert (v / ".git").exists()
+    assert (v / "secrets").exists()  # not discarded
+    # The remote branch was fetched + checked out; the sidecar can now push writes.
+    assert b._repo.active_branch.name == "main"
+    assert b._repo.remotes.origin.url == str(remote)
+
+
 def test_poll_commits_nothing_when_clean(backstop: VaultGitBackstop) -> None:
     result = backstop.poll_once()
     assert result.committed is False

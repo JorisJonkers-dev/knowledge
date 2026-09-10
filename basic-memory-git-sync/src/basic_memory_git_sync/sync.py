@@ -83,20 +83,45 @@ class VaultGitBackstop:
     # -- lifecycle --
 
     def attach(self) -> None:
-        """Attach to the existing checkout, or clone it on first boot."""
+        """Attach to the existing checkout, or initialise + fetch on first boot.
+
+        On a fresh PVC the directory is usually empty, so we clone. But the
+        shared vault PVC can also be created non-empty-but-not-a-repo — e.g.
+        when another container (or the vault-agent secrets mount) has already
+        touched the mount root — in which case ``clone_from`` would fail with
+        "destination path exists and is not an empty directory". We treat
+        "exists, not a git repo" as a repo to initialise: ``git init`` can
+        adopt an existing directory, then we add the origin and fetch the
+        branch. This makes first boot robust to the shared-PVC layout without
+        discarding anything already on the volume.
+        """
         if self._vault_dir.exists() and (self._vault_dir / ".git").exists():
             self._repo = Repo(self._vault_dir)
             self._log.info("backstop.attached", dir=str(self._vault_dir))
             self._repo.remotes.origin.fetch()
-        else:
-            self._vault_dir.parent.mkdir(parents=True, exist_ok=True)
-            self._repo = Repo.clone_from(
-                self._clone_url,
-                self._vault_dir,
-                branch=self._branch,
-                env=self._git_env(),
-            )
-            self._log.info("backstop.cloned", dir=str(self._vault_dir))
+            return
+
+        self._vault_dir.parent.mkdir(parents=True, exist_ok=True)
+        if self._vault_dir.exists() and not (self._vault_dir / ".git").exists():
+            # Adopt the existing (non-git) directory instead of clone_from,
+            # which refuses a non-empty target. init + remote + fetch mirrors
+            # a clone without requiring an empty target.
+            repo = Repo.init(self._vault_dir)
+            repo.create_remote("origin", self._clone_url)
+            with repo.git.custom_environment(**self._git_env()):
+                repo.git.fetch("origin", self._branch)
+                repo.git.checkout("-B", self._branch, f"origin/{self._branch}")
+            self._repo = repo
+            self._log.info("backstop.init_adopted", dir=str(self._vault_dir))
+            return
+
+        self._repo = Repo.clone_from(
+            self._clone_url,
+            self._vault_dir,
+            branch=self._branch,
+            env=self._git_env(),
+        )
+        self._log.info("backstop.cloned", dir=str(self._vault_dir))
 
     def close(self) -> None:
         self._repo = None
