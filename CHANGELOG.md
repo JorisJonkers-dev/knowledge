@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/JorisJonkers-dev/knowledge/compare/v0.5.0...v0.6.0) (2026-09-10)
+
+
+### Features
+
+* **backfill-batching:** resumable batch runner + protocol for [#249](https://github.com/JorisJonkers-dev/knowledge/issues/249) ([#49](https://github.com/JorisJonkers-dev/knowledge/issues/49)) ([7f9353a](https://github.com/JorisJonkers-dev/knowledge/commit/7f9353a491db7ce0aeca5dfbc70b5e06c6b785aa))
+* **basic-memory-git-sync:** git commit backstop for the Basic Memory vault ([#244](https://github.com/JorisJonkers-dev/knowledge/issues/244)) ([#44](https://github.com/JorisJonkers-dev/knowledge/issues/44)) ([6e49040](https://github.com/JorisJonkers-dev/knowledge/commit/6e490405b732fc54413c959d74ea129ada9c1dfd))
+* **ci:** add the deploy-preview workflow PLATFORM.md already documents ([#31](https://github.com/JorisJonkers-dev/knowledge/issues/31)) ([3c4eac2](https://github.com/JorisJonkers-dev/knowledge/commit/3c4eac2951448ae850a2f73148229a470058424b))
+* **ingest-worker:** job store for idempotent replay, dedup, resume + deadletter ([#47](https://github.com/JorisJonkers-dev/knowledge/issues/47)) ([f83b5d9](https://github.com/JorisJonkers-dev/knowledge/commit/f83b5d94915fcf29c11d2da27f18d758077097a4))
+* **note-import:** import tooling for the 778 curated notes ([#248](https://github.com/JorisJonkers-dev/knowledge/issues/248)) ([#48](https://github.com/JorisJonkers-dev/knowledge/issues/48)) ([06cf621](https://github.com/JorisJonkers-dev/knowledge/commit/06cf621b48a3d83bfacb1b7d80905b3cdefa0918))
+* **platform:** add the render-local.sh that PLATFORM.md already documents ([#25](https://github.com/JorisJonkers-dev/knowledge/issues/25)) ([f1dd9e6](https://github.com/JorisJonkers-dev/knowledge/commit/f1dd9e6a40f3699aa15b2522fbd0541371d90ebe))
+* **platform:** declare the ingest worker exempt from the health check ([#30](https://github.com/JorisJonkers-dev/knowledge/issues/30)) ([2d4f689](https://github.com/JorisJonkers-dev/knowledge/commit/2d4f689dd4758464a3680776538af4fa5113c0dd))
+
 ## [0.5.0](https://github.com/JorisJonkers-dev/knowledge/compare/v0.4.3...v0.5.0) (2026-08-20)
 
 
