@@ -106,7 +106,14 @@ class VaultGitBackstop:
                 # instead of crashing on the missing `.origin`.
                 self._log.info("backstop.registering_origin", dir=str(self._vault_dir))
                 origin = self._repo.create_remote("origin", self._clone_url)
-            origin.fetch()
+            with self._repo.git.custom_environment(**self._git_env()):
+                origin.fetch()
+                # A bare Repo.init (no remote, no branch) leaves the repo on
+                # the git default branch (often `master`); adopt the branch we
+                # track so polls commit to the right ref.
+                if self._repo.active_branch.name != self._branch:
+                    self._repo.git.checkout("-B", self._branch, f"origin/{self._branch}")
+                    self._log.info("backstop.branch_adopted", branch=self._branch)
             return
 
         self._vault_dir.parent.mkdir(parents=True, exist_ok=True)
