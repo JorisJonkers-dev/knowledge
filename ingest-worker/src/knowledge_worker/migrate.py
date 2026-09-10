@@ -38,6 +38,7 @@ from pathlib import Path
 import structlog
 from git import Actor, Repo
 
+from knowledge_worker.schema import PostgresSchemaRunner
 from knowledge_worker.settings import Settings
 from knowledge_worker.store import PostgresNoteStore
 from knowledge_worker.telemetry import configure as configure_telemetry
@@ -98,6 +99,8 @@ def _git_mv(repo: Repo, src: Path, dst: Path) -> None:
 
 
 def main() -> int:  # pragma: no cover — orchestrated via a k8s Job
+    if "--job-store" in sys.argv:
+        return run_job_store_migration()
     settings = Settings.from_env()
     configure_telemetry(level=settings.log_level, service_version=settings.service_version)
     log = structlog.get_logger(__name__)
@@ -191,6 +194,27 @@ def _git_env(ssh_key_path: str | None) -> dict[str, str]:
             f"ssh -i {ssh_key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
         )
     return env
+
+
+def run_job_store_migration() -> int:
+    """Apply the additive job/outbox/source-manifest schema (fleet-infra#246).
+
+    The worker owns these tables, so it runs its own migration — unlike
+    ``kb_notes`` which knowledge-api owns. Idempotent (all ``IF NOT
+    EXISTS``), safe to run on every boot.
+    """
+
+    settings = Settings.from_env()
+    configure_telemetry(level=settings.log_level, service_version=settings.service_version)
+    log = structlog.get_logger(__name__)
+
+    conninfo = (
+        f"host={settings.db_host} port={settings.db_port} dbname={settings.db_name} "
+        f"user={settings.db_user} password={settings.db_password}"
+    )
+    PostgresSchemaRunner(conninfo).apply()
+    log.info("migrate.job_store.applied", db=settings.db_name)
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover — k8s Job entry point
