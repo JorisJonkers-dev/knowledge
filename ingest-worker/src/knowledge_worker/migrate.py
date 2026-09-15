@@ -38,6 +38,7 @@ from pathlib import Path
 import structlog
 from git import Actor, Repo
 
+from knowledge_worker.job_store_copy import JobStoreCopier, build_conninfo
 from knowledge_worker.schema import PostgresSchemaRunner
 from knowledge_worker.settings import Settings
 from knowledge_worker.store import PostgresNoteStore
@@ -99,6 +100,8 @@ def _git_mv(repo: Repo, src: Path, dst: Path) -> None:
 
 
 def main() -> int:  # pragma: no cover — orchestrated via a k8s Job
+    if "--copy-job-store" in sys.argv:
+        return run_job_store_copy_migration()
     if "--job-store" in sys.argv:
         return run_job_store_migration()
     settings = Settings.from_env()
@@ -214,6 +217,57 @@ def run_job_store_migration() -> int:
     )
     PostgresSchemaRunner(conninfo).apply()
     log.info("migrate.job_store.applied", db=settings.db_name)
+    return 0
+
+
+def run_job_store_copy_migration() -> int:
+    """Copy job-store rows from the legacy ``knowledge_db`` into the
+    database named by ``DB_*`` (fleet-infra#246 placement).
+
+    Source connection settings are read from ``SOURCE_DB_*`` env vars,
+    defaulting to the same estate Postgres host/port/credentials as the
+    destination — only ``SOURCE_DB_NAME`` differs by default (the old
+    ``knowledge_db``). The destination must already have the job-store
+    schema applied (``--job-store`` / ``run_job_store_migration``) before
+    this runs.
+
+    Idempotent: rows already present at the destination are skipped via
+    ``ON CONFLICT DO NOTHING``, so re-running after a partial copy (or a
+    no-op run once fully migrated) is safe. Exits non-zero — verified by
+    a post-copy row count, not by trusting the INSERT — if any table's
+    destination count doesn't match its source count.
+    """
+
+    settings = Settings.from_env()
+    configure_telemetry(level=settings.log_level, service_version=settings.service_version)
+    log = structlog.get_logger(__name__)
+    env = os.environ
+
+    source_conninfo = build_conninfo(
+        host=env.get("SOURCE_DB_HOST", settings.db_host),
+        port=int(env.get("SOURCE_DB_PORT", str(settings.db_port))),
+        dbname=env.get("SOURCE_DB_NAME", "knowledge_db"),
+        user=env.get("SOURCE_DB_USER", settings.db_user),
+        password=env.get("SOURCE_DB_PASSWORD", settings.db_password),
+    )
+    dest_conninfo = build_conninfo(
+        host=settings.db_host,
+        port=settings.db_port,
+        dbname=settings.db_name,
+        user=settings.db_user,
+        password=settings.db_password,
+    )
+
+    results = JobStoreCopier(source_conninfo, dest_conninfo).copy_all()
+    for result in results:
+        log.info(
+            "migrate.job_store_copy.table",
+            table=result.table,
+            rows_copied=result.rows_copied,
+            source_count=result.source_count,
+            dest_count=result.dest_count,
+        )
+    log.info("migrate.job_store_copy.verified", dest_db=settings.db_name)
     return 0
 
 

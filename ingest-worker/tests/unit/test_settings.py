@@ -68,3 +68,38 @@ def test_kb_persist_honours_overrides() -> None:
     assert s.db_name == "kb"
     assert s.db_user == "kb_app"
     assert s.db_password == "hunter2"
+
+
+def test_downstream_targets_default_disabled() -> None:
+    """Both new-platform targets default off so knowledge-system's
+    vault-only deployment and local/unit runs are unaffected."""
+    s = Settings.from_env(env={})
+    assert s.hindsight_enabled is False
+    assert s.basic_memory_enabled is False
+    assert s.hindsight_base_url.endswith(":8888")
+    assert s.basic_memory_base_url.endswith(":8000")
+    assert s.hindsight_default_bank == "personal"
+    assert s.basic_memory_folder == "_inbox"
+
+
+def test_downstream_targets_honour_overrides() -> None:
+    s = Settings.from_env(
+        env={
+            "HINDSIGHT_ENABLED": "true",
+            "HINDSIGHT_BASE_URL": "http://hindsight-api:9999",
+            "HINDSIGHT_API_KEY": "hs-key",
+            "HINDSIGHT_DEFAULT_BANK": "work",
+            "BASIC_MEMORY_ENABLED": "true",
+            "BASIC_MEMORY_BASE_URL": "http://basic-memory:9999",
+            "BASIC_MEMORY_PROJECT": "vault",
+            "BASIC_MEMORY_FOLDER": "captures",
+        }
+    )
+    assert s.hindsight_enabled is True
+    assert s.hindsight_base_url == "http://hindsight-api:9999"
+    assert s.hindsight_api_key == "hs-key"
+    assert s.hindsight_default_bank == "work"
+    assert s.basic_memory_enabled is True
+    assert s.basic_memory_base_url == "http://basic-memory:9999"
+    assert s.basic_memory_project == "vault"
+    assert s.basic_memory_folder == "captures"

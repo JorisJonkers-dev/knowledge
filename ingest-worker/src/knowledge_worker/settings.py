@@ -35,6 +35,14 @@ class Settings:
     db_name: str
     db_user: str
     db_password: str
+    hindsight_enabled: bool
+    hindsight_base_url: str
+    hindsight_api_key: str
+    hindsight_default_bank: str
+    basic_memory_enabled: bool
+    basic_memory_base_url: str
+    basic_memory_project: str
+    basic_memory_folder: str
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Settings:
@@ -83,4 +91,27 @@ class Settings:
             db_name=e.get("DB_NAME", "knowledge_db"),
             db_user=e.get("DB_USER", "kb_user"),
             db_password=e.get("DB_PASSWORD", "kb_password"),
+            # Downstream targets (fleet-infra#246 placement). Both default
+            # disabled so existing knowledge-system deployments (vault-only)
+            # and local/unit runs are unaffected; the knowledge-platform-system
+            # Deployment turns both on.
+            hindsight_enabled=e.get("HINDSIGHT_ENABLED", "false").lower() in ("1", "true", "yes"),
+            hindsight_base_url=e.get(
+                "HINDSIGHT_BASE_URL",
+                "http://hindsight-api.knowledge-platform-system.svc.cluster.local:8888",
+            ),
+            hindsight_api_key=e.get("HINDSIGHT_API_KEY", ""),
+            # One bank per project/domain; a scope with no derivable slug
+            # (see hindsight_client.bank_for_scope) falls back to this.
+            hindsight_default_bank=e.get("HINDSIGHT_DEFAULT_BANK", "personal"),
+            basic_memory_enabled=e.get("BASIC_MEMORY_ENABLED", "false").lower()
+            in ("1", "true", "yes"),
+            basic_memory_base_url=e.get(
+                "BASIC_MEMORY_BASE_URL",
+                "http://basic-memory.knowledge-platform-system.svc.cluster.local:8000",
+            ),
+            basic_memory_project=e.get("BASIC_MEMORY_PROJECT", "main"),
+            # Mirrors the vault writer's _inbox/ convention: captures land
+            # unclassified, a curator promotes them later.
+            basic_memory_folder=e.get("BASIC_MEMORY_FOLDER", "_inbox"),
         )
