@@ -1,13 +1,4 @@
-"""HTTP client for Hindsight's retain API (fleet-infra#246 placement).
-
-Hindsight owns long-term recall. The worker retains each captured note into
-a bank scoped to the note's project/domain, keyed by the note's own stable
-id as `source_id` — an upsert-by-id PUT so a replay or a revision updates
-the same memory in place rather than appending a duplicate, and a delete by
-that same id is exactly the "an old queued job must not resurrect a
-deleted source" guarantee: deleting once removes the record no matter how
-many times a stale job replays afterward.
-"""
+"""HTTP client for Hindsight's retain/delete API (fleet-infra#246 placement)."""
 
 from __future__ import annotations
 
@@ -84,6 +75,7 @@ class HindsightClient:
         return HindsightWriteResult(bank=bank, source_id=note.id, memory_id=memory_id)
 
     def delete(self, note: CapturedNote) -> None:
+        # Not yet dispatched by Consumer — no deletion message on the queue (fleet-infra#246).
         bank = bank_for_scope(note.scope, default_bank=self._default_bank)
         response = self._client.delete(f"/v1/banks/{bank}/memories/{note.id}")
         # A delete on an already-absent memory is the success case for a

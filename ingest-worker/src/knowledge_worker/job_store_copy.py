@@ -1,24 +1,4 @@
-"""Copies job-store rows into the knowledge-platform-system database
-(fleet-infra#246 placement).
-
-The worker's job store (``ingest_jobs`` / ``ingest_outbox`` /
-``ingest_source_manifest``) moves with it from the old ``knowledge_db`` to
-the new platform's database. Both live in the same estate Postgres
-instance but as separate databases, so there is no ``dblink``/FDW-free way
-to move rows with a single SQL statement across a connection boundary —
-this reads every row over one connection and writes it over another.
-
-Table order follows the FK: ``ingest_jobs`` before ``ingest_outbox``
-(``ON DELETE CASCADE`` references it); ``ingest_source_manifest`` has no
-FK so its position doesn't matter. ``ON CONFLICT ... DO NOTHING`` on each
-table's own key makes a re-run idempotent, so the copy Job can be
-Flux-forced like the schema migration Job it follows.
-
-Verification is by count, not by trusting the INSERT: after each table's
-copy, the destination's row count must equal the source's, or
-``JobStoreCopyVerificationError`` aborts the run (and the k8s Job exits
-non-zero) rather than silently under-copying.
-"""
+"""Copies job-store rows into the knowledge-platform-system database (fleet-infra#246 placement)."""
 
 from __future__ import annotations
 

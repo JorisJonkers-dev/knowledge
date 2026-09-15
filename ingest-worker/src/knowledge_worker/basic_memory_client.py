@@ -1,22 +1,4 @@
-"""Basic Memory writer via its MCP tool surface (fleet-infra#246 placement).
-
-Decision: write through Basic Memory's MCP tools (`write_note` /
-`edit_note` / `delete_note`), never to a second git clone of
-knowledge-vault. Basic Memory's own `git-sync` sidecar only *pushes*
-commits it observes on the pod's shared volume — it never *pulls* — so a
-second writer committing to its own clone of the same repo would diverge
-from what Basic Memory has indexed and never reach the canonical vault via
-that sidecar (nor would Basic Memory's own search/recall ever see it,
-since it only indexes its own mounted vault). Going through the MCP tools
-instead means every write lands inside the vault Basic Memory already
-watches, so its filesystem sync indexes it immediately and git-sync picks
-up the resulting commit on its next poll — one writer, one source of truth.
-
-Revisions call `edit_note`, never `write_note --overwrite`: a prior write
-test against this server found `--overwrite` to be last-writer-wins (it
-silently drops a concurrent human edit), while `edit_note` reports a
-conflict instead of clobbering one.
-"""
+"""Basic Memory writer via its MCP tool surface (fleet-infra#246 placement)."""
 
 from __future__ import annotations
 
@@ -106,6 +88,7 @@ class BasicMemoryClient:
             return BasicMemoryWriteResult(identifier=identifier, created=True)
 
     def delete(self, note: CapturedNote) -> None:
+        # Not yet dispatched by Consumer — no deletion message on the queue (fleet-infra#246).
         identifier = note_identifier(note, folder=self._folder)
         # Already gone — a replayed tombstone is a no-op, not a failure.
         with contextlib.suppress(McpNotFoundError):

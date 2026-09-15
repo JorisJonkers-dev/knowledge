@@ -1,14 +1,4 @@
-"""Minimal MCP client transport over SSE (the shape Basic Memory speaks).
-
-Basic Memory exposes its tools over the MCP "SSE" transport: a GET on
-``/mcp`` opens an event stream whose first event (``event: endpoint``)
-names a session-scoped POST URL; every JSON-RPC request is POSTed there
-and its response arrives asynchronously as a ``message`` event on that
-same stream. This client reads the stream on a background thread and
-correlates responses to requests by JSON-RPC ``id`` — no MCP SDK dependency
-is pulled in for the handful of calls (`initialize` once, then repeated
-`tools/call`) the worker actually needs.
-"""
+"""Minimal MCP client transport over SSE (the shape Basic Memory speaks)."""
 
 from __future__ import annotations
 
