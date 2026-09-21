@@ -20,6 +20,7 @@ class Settings:
     author_name: str
     author_email: str
     poll_seconds: int
+    network_retry_seconds: int
     push: bool
     log_level: str
     service_version: str
@@ -42,6 +43,8 @@ class Settings:
             author_name=e.get("VAULT_AUTHOR_NAME", "basic-memory-vault"),
             author_email=e.get("VAULT_AUTHOR_EMAIL", "basicmemory@knowledge.local"),
             poll_seconds=int(e.get("POLL_SECONDS", "10")),
+            # Backoff while the remote is unreachable; the cross-site link drops for about a minute.
+            network_retry_seconds=int(e.get("NETWORK_RETRY_SECONDS", "30")),
             # Off in local/dev; the manifest sets it true in production.
             push=e.get("PUSH", "false").lower() in ("1", "true", "yes"),
             log_level=e.get("LOG_LEVEL", "INFO"),

@@ -6,7 +6,13 @@ import pytest
 from git import Actor, GitCommandError, Repo
 
 from basic_memory_git_sync.settings import Settings
-from basic_memory_git_sync.sync import VaultGitBackstop, run_forever
+from basic_memory_git_sync.sync import (
+    SyncResult,
+    VaultGitBackstop,
+    _run_loop,
+    is_transient_network_error,
+    run_forever,
+)
 
 
 @pytest.fixture()
@@ -219,6 +225,7 @@ def _settings(tmp_path: Path, remote: Path, **overrides: object) -> Settings:
         "author_name": "basic-memory-vault",
         "author_email": "basicmemory@test",
         "poll_seconds": 1,
+        "network_retry_seconds": 1,
         "push": False,
         "log_level": "INFO",
         "service_version": "test",
@@ -287,3 +294,74 @@ def test_settings_from_env_defaults(tmp_path: Path) -> None:
     assert s.branch == "main"
     assert s.push is False
     assert s.poll_seconds == 10
+
+
+def test_transient_network_errors_are_told_apart_from_refusals() -> None:
+    def err(stderr: str) -> GitCommandError:
+        return GitCommandError(["git", "fetch", "origin"], 128, stderr)
+
+    assert is_transient_network_error(
+        err("ssh: Could not resolve hostname github.com: Temporary failure in name resolution")
+    )
+    assert is_transient_network_error(
+        err("ssh: connect to host github.com port 22: Connection timed out")
+    )
+    assert not is_transient_network_error(err("git@github.com: Permission denied (publickey)."))
+    assert not is_transient_network_error(err("! [rejected] main -> main (non-fast-forward)"))
+    assert not is_transient_network_error(err("CONFLICT (content): Merge conflict in note.md"))
+
+
+def test_run_forever_retries_a_dns_blip_instead_of_halting() -> None:
+    """The estate's cross-site link drops for about a minute; that must not stop the sidecar."""
+    calls: list[str] = []
+    slept: list[float] = []
+
+    class FlakyBackstop:
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        def attach(self) -> None:
+            calls.append("attach")
+
+        def poll_once(self) -> SyncResult:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise GitCommandError(
+                    ["git", "fetch", "origin"],
+                    128,
+                    "ssh: Could not resolve hostname github.com: "
+                    "Temporary failure in name resolution",
+                )
+            calls.append("polled")
+            return SyncResult(committed=False, commit_sha=None)
+
+    backstop = FlakyBackstop()
+    _run_loop(backstop, retry_seconds=30, poll_seconds=1, sleep_fn=slept.append, max_iterations=3)
+
+    assert calls.count("polled") == 2, "the loop kept running after the blip"
+    assert 30 in slept, "it backed off with the configured network retry"
+
+
+def test_run_forever_still_halts_on_a_conflict() -> None:
+    slept: list[float] = []
+    polls = 0
+
+    class ConflictingBackstop:
+        def attach(self) -> None: ...
+
+        def poll_once(self) -> SyncResult:
+            nonlocal polls
+            polls += 1
+            raise GitCommandError(
+                ["git", "pull"], 1, "CONFLICT (content): Merge conflict in note.md"
+            )
+
+    _run_loop(
+        ConflictingBackstop(),
+        retry_seconds=30,
+        poll_seconds=1,
+        sleep_fn=slept.append,
+        max_iterations=5,
+    )
+
+    assert polls == 1, "a conflict must stop the loop, not spin on it"

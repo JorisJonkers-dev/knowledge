@@ -52,6 +52,41 @@ class VaultBackstop(Protocol):
     def close(self) -> None: ...
 
 
+class PollingBackstop(Protocol):
+    def attach(self) -> None: ...
+    def poll_once(self) -> SyncResult: ...
+
+
+_TRANSIENT_MARKERS = (
+    "could not resolve hostname",
+    "could not resolve host",
+    "temporary failure in name resolution",
+    "connection timed out",
+    "connection refused",
+    "connection reset by peer",
+    "network is unreachable",
+    "operation timed out",
+    "the remote end hung up unexpectedly",
+    "early eof",
+    "ssh_exchange_identification",
+    "failed to connect to",
+)
+
+
+def is_transient_network_error(exc: GitCommandError) -> bool:
+    """True when git failed to reach the remote, rather than refusing a change.
+
+    A DNS blip is not a conflict: the estate's cross-site link drops for about
+    a minute at a time and every drop used to kill this sidecar (44 restarts
+    in three days, all "Could not resolve hostname github.com"). A conflict or
+    a refused push still halts the loop -- those need a human.
+    """
+    text = f"{exc}".lower()
+    if "permission denied" in text or "authentication failed" in text:
+        return False
+    return any(marker in text for marker in _TRANSIENT_MARKERS)
+
+
 class VaultGitBackstop:
     """Attaches to the shared working tree and commits+pushes changes on demand.
 
@@ -252,23 +287,73 @@ def run_forever(
         push=settings.push,
     )
     log.info("backstop.boot", version=settings.service_version, dir=settings.vault_dir)
-    backstop.attach()
-    iterations = 0
+    _attach_with_retry(backstop, log, sleep_fn, settings.network_retry_seconds)
     try:
-        while max_iterations is None or iterations < max_iterations:
-            iterations += 1
-            try:
-                backstop.poll_once()
-            except GitCommandError as exc:
-                # A pull conflict or refused push stops the loop so the human
-                # (or a retry after reconciling) resolves it; we must not
-                # auto-resolve and drop an edit. Bounded wait before exiting.
-                log.error("backstop.halted", error=str(exc))
-                sleep_fn(10)
-                break
-            sleep_fn(settings.poll_seconds)
+        _run_loop(
+            backstop,
+            retry_seconds=settings.network_retry_seconds,
+            poll_seconds=settings.poll_seconds,
+            sleep_fn=sleep_fn,
+            max_iterations=max_iterations,
+        )
     finally:
         backstop.close()
+
+
+def _run_loop(
+    backstop: PollingBackstop,
+    *,
+    retry_seconds: int,
+    poll_seconds: int,
+    sleep_fn: Callable[[float], None],
+    max_iterations: int | None,
+) -> None:
+    """The poll loop itself, with the backstop injected so tests can drive it."""
+    log = structlog.get_logger(__name__)
+    iterations = 0
+    while max_iterations is None or iterations < max_iterations:
+        iterations += 1
+        try:
+            backstop.poll_once()
+        except GitCommandError as exc:
+            if is_transient_network_error(exc):
+                # The remote was unreachable, not unwilling. Keep the local
+                # commits and try again; the vault is on a PVC and nothing is
+                # lost by waiting.
+                log.warning("backstop.network_retry", error=str(exc))
+                sleep_fn(retry_seconds)
+                continue
+            # A pull conflict or refused push stops the loop so the human (or
+            # a retry after reconciling) resolves it; we must not auto-resolve
+            # and drop an edit. Bounded wait before exiting.
+            log.error("backstop.halted", error=str(exc))
+            sleep_fn(10)
+            break
+        sleep_fn(poll_seconds)
+
+
+def _attach_with_retry(
+    backstop: PollingBackstop,
+    log: structlog.stdlib.BoundLogger,
+    sleep_fn: Callable[[float], None],
+    retry_seconds: int,
+    *,
+    max_attempts: int = 30,
+) -> None:
+    """Attach, retrying while the remote is merely unreachable.
+
+    First boot clones and fetches. A DNS blip there used to crash the
+    container before the loop ever started.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            backstop.attach()
+            return
+        except GitCommandError as exc:
+            if not is_transient_network_error(exc) or attempt == max_attempts:
+                raise
+            log.warning("backstop.attach_retry", attempt=attempt, error=str(exc))
+            sleep_fn(retry_seconds)
 
 
 def reset_vault_dir(path: Path) -> None:
