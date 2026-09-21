@@ -26,6 +26,10 @@ dependencies = [
   # consumer skeleton; the SQL queries come in once the LightRAG ingest pipeline lands.
   "psycopg[binary,pool]>=3.2.0,<4",
   "gitpython>=3.1.50",
+  # HTTP client for the Hindsight retain API and the Basic Memory MCP
+  # transport (fleet-infra#246 placement) — sync client, matching the
+  # worker's blocking pika consumer model.
+  "httpx>=0.27.0,<1",
 ]
 
 [dependency-groups]
