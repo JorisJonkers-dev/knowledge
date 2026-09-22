@@ -22,9 +22,9 @@ softness.
 `[GIVEN-FROM-TICKET]` #240 sample estimate: the backfill is **embed-only and
 self-hosted ⇒ ~$0 monetary**; a separate **LLM extraction pass would cost
 ~$14–20** for the sample if enabled. `[GIVEN-FROM-TICKET]` The estate default
-model is **`deepseek/deepseek-v4-flash-0731`**. It was `openrouter/pareto-code`
-until 2026-09-22; a router picks and bills a model per request, and the estate
-pins named models only.
+model is **`deepseek/deepseek-v4-flash-0731`**. A router held this slot until
+2026-09-22; a router picks and bills a model per request, and the estate pins
+named models only (fleet-infra#347).
 
 This note rules out the "embed everything" reading of a backfill and defines:
 what is selected (goes in), what is durable, how batches are reconciled, how
