@@ -18,7 +18,7 @@ LLM_EXTRACT_USD_LOW = 14.0  # per-sample envelope, low end
 LLM_EXTRACT_USD_HIGH = 20.0  # per-sample envelope, high end
 LLM_EXTRACT_SAMPLE_RECORDS = 250  # [DESIGN] sampled corpus size for the estimate
 
-DEFAULT_MODEL_ID = "openrouter/pareto-code"  # [GIVEN-FROM-TICKET] #240 finding
+DEFAULT_MODEL_ID = "deepseek/deepseek-v4-flash-0731"  # named model, never a router
 
 
 class CostPolicyError(RuntimeError):
