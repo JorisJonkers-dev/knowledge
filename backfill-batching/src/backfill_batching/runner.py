@@ -101,7 +101,7 @@ class Runner:
     policy_name: str = "default_selection_policy"
     llm_pass_enabled: bool = False
     llm_allowance_usd: float | None = None
-    model_id: str = "deepseek/deepseek-v4-flash-0731"
+    model_id: str = "mistralai/mistral-small-2603"
     dry_run: bool = False
     run_id: str | None = None
     # Test seam: raise after this many total writes to simulate a crash.
