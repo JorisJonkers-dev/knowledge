@@ -75,7 +75,7 @@ jobs:
     outputs:
       images-lock-artifact: images-lock-${{ github.run_id }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
@@ -156,7 +156,7 @@ jobs:
           done
 
       - name: upload-image-lock
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: images-lock-${{ github.run_id }}
           path: platform/images.lock.json
