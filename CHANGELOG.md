@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/JorisJonkers-dev/knowledge/compare/v0.6.3...v0.7.0) (2026-09-24)
+
+
+### Features
+
+* **backfill:** default to the EU-served model ([#61](https://github.com/JorisJonkers-dev/knowledge/issues/61)) ([5de03f1](https://github.com/JorisJonkers-dev/knowledge/commit/5de03f180f14cf2dcc6e9e648e6400bf60a428dc))
+* **ingest-worker:** configurable Hindsight/Basic Memory downstream targets ([#56](https://github.com/JorisJonkers-dev/knowledge/issues/56)) ([02d1aa6](https://github.com/JorisJonkers-dev/knowledge/commit/02d1aa6b0e0f398799231fb180741297ad4e01ab))
+
+
+### Bug Fixes
+
+* **backfill:** default to a named model, never the pareto router ([#59](https://github.com/JorisJonkers-dev/knowledge/issues/59)) ([610f85c](https://github.com/JorisJonkers-dev/knowledge/commit/610f85cca67683acd8fd5807bc95b55baae5378b))
+* **git-sync:** retry a blip instead of crashing the sidecar ([#58](https://github.com/JorisJonkers-dev/knowledge/issues/58)) ([77d7ed3](https://github.com/JorisJonkers-dev/knowledge/commit/77d7ed3a9a4bb7bb0bc7d86c6e0d9fbacfb40731))
+
 ## [0.6.3](https://github.com/JorisJonkers-dev/knowledge/compare/v0.6.2...v0.6.3) (2026-09-10)
 
 
