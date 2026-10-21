@@ -1,6 +1,6 @@
 [versions]
-jorisjonkers-commons = "0.7.0"
-jorisjonkers-conventions = "0.7.0"
+jorisjonkers-commons = "0.11.0"
+jorisjonkers-conventions = "0.7.1"
 kotlin = "2.3.21"
 
 [libraries]
