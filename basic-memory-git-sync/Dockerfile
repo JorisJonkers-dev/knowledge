@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.28
 
 # Sidecar that commits + pushes the notes Basic Memory writes into the shared
 # knowledge-vault working tree. Shares the vault volume with the Basic Memory
