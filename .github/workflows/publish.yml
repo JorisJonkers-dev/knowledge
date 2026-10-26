@@ -30,7 +30,7 @@ permissions: {}
 jobs:
   # -- 1a. Build and push knowledge-api image --------------------------------
   publish-api-image:
-    uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@618d5851b22d2c46d4234deaa07e0f1950e2b65d # v0.34.3
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@f2180a482b63756affde537233881fa12e65df70 # v0.35.0
     with:
       platforms: linux/amd64,linux/arm64
       image-name: knowledge/knowledge-api
@@ -42,7 +42,7 @@ jobs:
 
   # -- 1b. Build and push knowledge-ingest-worker image ----------------------
   publish-worker-image:
-    uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@618d5851b22d2c46d4234deaa07e0f1950e2b65d # v0.34.3
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@f2180a482b63756affde537233881fa12e65df70 # v0.35.0
     with:
       platforms: linux/amd64,linux/arm64
       image-name: knowledge/knowledge-ingest-worker
@@ -54,7 +54,7 @@ jobs:
 
   # -- 1c. Build and push basic-memory-git-sync image ------------------------
   publish-memory-sync-image:
-    uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@618d5851b22d2c46d4234deaa07e0f1950e2b65d # v0.34.3
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/container-publish.yml@f2180a482b63756affde537233881fa12e65df70 # v0.35.0
     with:
       platforms: linux/amd64,linux/arm64
       image-name: knowledge/basic-memory-git-sync
@@ -165,7 +165,7 @@ jobs:
   # -- 3. Render and publish the deploy artifact ----------------------------
   publish-deploy-artifact:
     needs: [resolve-image-lock]
-    uses: JorisJonkers-dev/github-workflows/.github/workflows/deploy-artifact.yml@618d5851b22d2c46d4234deaa07e0f1950e2b65d # v0.34.3
+    uses: JorisJonkers-dev/github-workflows/.github/workflows/deploy-artifact.yml@f2180a482b63756affde537233881fa12e65df70 # v0.35.0
     with:
       ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
       artifact-name: knowledge
