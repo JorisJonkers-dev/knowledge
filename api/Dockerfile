@@ -3,7 +3,7 @@
 # The Gradle build produces an architecture-independent jar, so it runs on the
 # builder's native platform. Without this the whole Kotlin build would run under
 # QEMU for the arm64 image, taking far longer for a byte-identical artifact.
-FROM --platform=$BUILDPLATFORM gradle:9.5.1-jdk21-alpine AS build
+FROM --platform=$BUILDPLATFORM gradle:9.8.1-jdk21-alpine AS build
 WORKDIR /app
 
 # Layer 1: build scripts only — keeps dependency resolution cached unless
@@ -43,7 +43,7 @@ RUN apk add --no-cache curl && \
 # follow-up the same way auth-api's was; for Phase 4a the cold-start tax
 # is acceptable since the service is in-cluster only and isn't on the
 # forward-auth hot path.
-FROM bellsoft/liberica-runtime-container:jdk-21-crac-slim-glibc
+FROM bellsoft/liberica-runtime-container:jdk-21.0.12_11-crac-slim-glibc
 WORKDIR /app
 ARG GIT_SHA=unknown
 ENV SERVICE_VERSION=${GIT_SHA}
