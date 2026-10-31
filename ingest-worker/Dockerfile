@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.28
 
 # Python 3.12 slim — matches pyproject's requires-python; bookworm is
 # stable and small enough.
