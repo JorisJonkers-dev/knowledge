@@ -1,5 +1,9 @@
 # knowledge
 
+> **Retired.** Nothing deploys from this repository any more: the agent platform it served
+> was retired on 2026-10-23, when Hermes replaced it. It was archived on 2026-11-02 and
+> is kept for its history.
+
 Knowledge API, MCP endpoint, and ingest worker for the JorisJonkers-dev agent
 knowledge base.
 
